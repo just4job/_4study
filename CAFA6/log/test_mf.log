@@ -1,0 +1,22 @@
+2026-05-23 03:57:50,781 test_mf INFO eval split=test, dataset=/kaggle/working/CAFA6/divided_data/mf_test_dataset
+2026-05-23 04:02:56,075 test_mf INFO eval split=test, dataset=/kaggle/working/CAFA6/divided_data/mf_test_dataset
+2026-05-23 04:03:13,583 test_mf INFO #########mf###########
+2026-05-23 04:03:13,583 test_mf INFO ########start testing###########
+2026-05-23 04:04:51,920 test_mf INFO eval split=test, dataset=/kaggle/working/CAFA6/divided_data/mf_test_dataset
+2026-05-23 04:05:09,749 test_mf INFO #########mf###########
+2026-05-23 04:05:09,749 test_mf INFO ########start testing###########
+2026-05-23 04:06:48,511 test_mf INFO loss: 50.873849751997966, thresh: 0.26, f_score 0.47724337448984866
+2026-05-23 04:06:48,512 test_mf INFO auc 0.8579599001480664, recall 0.33680910018958726, precision 0.8185362395888711,aupr 0.44066524157274845
+2026-05-23 04:06:48,934 test_mf INFO ROC curve saved to /kaggle/working/CAFA6/test_result/mf_roc_curve.png
+2026-05-23 04:10:43,415 test_mf INFO eval split=test, dataset=/kaggle/working/CAFA6/divided_data/mf_test_dataset
+2026-05-23 04:11:00,370 test_mf INFO #########mf###########
+2026-05-23 04:11:00,370 test_mf INFO ########start testing###########
+2026-05-23 04:12:39,407 test_mf INFO loss: 50.87384982984893, thresh: 0.26, f_score 0.47724337448984866
+2026-05-23 04:12:39,407 test_mf INFO auc 0.8579598975759117, recall 0.33680910018958726, precision 0.8185362395888711,aupr 0.44066525555199326
+2026-05-23 04:12:39,775 test_mf INFO ROC curve saved to /kaggle/working/CAFA6/test_result/mf_roc_curve.png
+2026-05-24 11:35:23,465 test_mf INFO eval split=test, dataset=/kaggle/working/CAFA6/divided_data/mf_test_dataset, baseline_parity=True, use_ppi=True, thresh=0.71, model=/kaggle/working/CAFA6/save_models/bestmodel_mf_64_0.0001_0.3.pkl
+2026-05-24 11:35:51,877 test_mf INFO #########mf###########
+2026-05-24 11:35:51,877 test_mf INFO ########start testing###########
+2026-05-24 11:37:33,291 test_mf INFO loss: 75.68832117197465, thresh: 0.02, f_score 0.018297988712925442
+2026-05-24 11:37:33,292 test_mf INFO auc 0.5403445615550332, recall 0.026833892372757767, precision 0.013882077784903241,aupr 0.021760692814146682
+2026-05-24 11:37:33,920 test_mf INFO ROC curve saved to /kaggle/working/CAFA6/test_result/mf_roc_curve.png

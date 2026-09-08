@@ -1,0 +1,23 @@
+2026-05-23 03:59:07,407 test_bp INFO eval split=test, dataset=/kaggle/working/CAFA6/divided_data/bp_test_dataset
+2026-05-23 04:03:56,343 test_bp INFO eval split=test, dataset=/kaggle/working/CAFA6/divided_data/bp_test_dataset
+2026-05-23 04:08:35,727 test_bp INFO eval split=test, dataset=/kaggle/working/CAFA6/divided_data/bp_test_dataset
+2026-05-23 04:08:57,726 test_bp INFO #########bp###########
+2026-05-23 04:08:57,726 test_bp INFO ########start testing###########
+2026-05-23 04:14:24,540 test_bp INFO eval split=test, dataset=/kaggle/working/CAFA6/divided_data/bp_test_dataset
+2026-05-23 04:14:46,311 test_bp INFO #########bp###########
+2026-05-23 04:14:46,311 test_bp INFO ########start testing###########
+2026-05-23 04:18:12,808 test_bp INFO loss: 14.148936178003039, thresh: 0.1, f_score 0.010044242496711707
+2026-05-23 04:18:12,808 test_bp INFO auc 0.5199535187113284, recall 0.1439873417721519, precision 0.005203617753295148,aupr 0.003057621845459366
+2026-05-23 04:18:13,201 test_bp INFO ROC curve saved to /kaggle/working/CAFA6/test_result/bp_roc_curve.png
+2026-05-23 07:31:51,363 test_bp INFO eval split=test, dataset=/kaggle/working/CAFA6/divided_data/bp_test_dataset
+2026-05-23 07:32:25,742 test_bp INFO #########bp###########
+2026-05-23 07:32:25,742 test_bp INFO ########start testing###########
+2026-05-23 08:34:43,334 test_bp INFO loss: 492.4208003452846, thresh: 0.19, f_score 0.3330630025256621
+2026-05-23 08:34:43,353 test_bp INFO auc 0.9441870208256342, recall 0.3078900300949974, precision 0.3627187503942869,aupr 0.2812300652929951
+2026-05-23 08:34:44,966 test_bp INFO ROC curve saved to /kaggle/working/CAFA6/test_result/bp_roc_curve.png
+2026-06-06 07:16:49,130 test_bp INFO eval split=test, dataset=/kaggle/working/CAFA6/divided_data/bp_test_dataset, baseline_parity=True, use_ppi=True, fusion_mode=concat, thresh=0.4, model=/kaggle/working/CAFA6/save_models/bestmodel_bp_64_0.0001_0.1.pkl
+2026-06-06 07:16:49,385 test_bp INFO #########bp###########
+2026-06-06 07:16:49,385 test_bp INFO ########start testing###########
+2026-06-06 08:21:56,650 test_bp INFO loss: 492.89577974591936, thresh: 0.16, f_score 0.31511217401207153
+2026-06-06 08:21:56,668 test_bp INFO auc 0.9323392648080041, recall 0.32597915841106984, precision 0.30494634859885184,aupr 0.25092202164187477
+2026-06-06 08:21:58,570 test_bp INFO ROC curve saved to /kaggle/working/CAFA6/test_result/bp_roc_curve.png

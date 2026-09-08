@@ -1,0 +1,52 @@
+# IDE / editor
+.claude/
+final_pro/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+.ipynb_checkpoints/
+
+# Logs & checkpoints (tạo khi train)
+
+test_result/
+
+# Dữ liệu đã xử lý & dataset (quá lớn — dùng pack_for_kaggle.py riêng)
+proceed_data/
+divided_data/
+kaggle_data.zip
+kaggle_mf_train.zip
+protein_node2onehot
+protein_node2vec
+protein_sequence
+**/proteins_edges/
+
+# Raw / intermediate (nếu copy vào repo)
+raw_data/
+Antigravity-x64.exe
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Office / assets tạm (giữ model_with_ppi.png nếu cần — bỏ dòng dưới)
+# slide.pptx
+
+# Git worktrees
+.claude/worktrees/
+"Antigravity-x64.exe" 

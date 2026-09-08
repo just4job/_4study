@@ -1,0 +1,20 @@
+biopython 
+scipy 
+numpy
+torch
+torchvision
+pandas
+networkx    
+tqdm
+# Local Windows: dgl==1.1.2 (CPU). Kaggle T4: dgl==2.1.0+cu118
+dgl>=1.1.2
+
+node2vec 
+networkx
+allenlp
+fair-esm
+packaging
+scikit-learn 
+transformers
+matplotlib
+
