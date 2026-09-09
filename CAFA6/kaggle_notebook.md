@@ -273,6 +273,16 @@ so 1 chiều với 2 chiều (giữ PPI cả 2 bên): `--configs ppi_attn ppi_bi
 Checkpoint: `bestmodel_{branch}_{ppi_concat|no_ppi_attn|ppi_attn|ppi_bi_attn}_{batch}_{lr}_{dropout}.pkl`  
 Kết quả: `log/fusion_ablation_summary.json`, `log/test_{branch}_{config}.log`
 
+**Ablation loss** (`bce` / `bce_pos_weight` / `focal` — xem README mục 4.6): thêm
+`--loss` để áp dùng chung cho mọi config fusion trong 1 lần chạy. Checkpoint được
+thêm hậu tố `_{loss}` nên không đè lên run mặc định.
+
+```python
+# So focal vs bce_pos_weight trên đúng 1 hướng fusion (nhanh, 2 lần chạy)
+!python /kaggle/working/CAFA6/scripts/run_fusion_ablation.py --configs ppi_attn --loss bce_pos_weight
+!python /kaggle/working/CAFA6/scripts/run_fusion_ablation.py --configs ppi_attn --loss focal
+```
+
 ### Train lại MF (baseline-parity, tránh dropout 0.3)
 
 Run MF **24/05** với `dropout=0.3` cho F-max test **0.018**. Code mới dùng **dropout 0.1** cho MF và eval ưu tiên `bestmodel_mf_64_0.0001_0.1.pkl`.

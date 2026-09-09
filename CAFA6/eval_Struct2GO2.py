@@ -14,7 +14,7 @@ from dgl.dataloading import GraphDataLoader
 from sklearn.metrics import roc_auc_score, roc_curve, auc, precision_score, recall_score, f1_score, average_precision_score
 import pickle
 from data_processing.divide_data import MyDataSet
-from model.evaluation import cacul_aupr, calculate_performance, roc_auc_flat
+from model.evaluation import cacul_aupr, calculate_performance, macro_and_bucket_report, roc_auc_flat
 from model.network import patch_legacy_checkpoint
 from sklearn.metrics import average_precision_score
 from sklearn.metrics import roc_auc_score
@@ -574,7 +574,20 @@ if __name__ == "__main__":
     logger.info('auc {}, recall {}, precision {},aupr {}'.format(auc_score, recall, precision, aupr))
     print('loss: {}, thresh: {}, f_score {}'.format(t_loss, t, f_score))
     print('auc {}, recall {}, precision {},aupr {}'.format(auc_score, recall, precision, aupr))
-    
+
+    # Chẩn đoán mất cân bằng (không đổi F-max/threshold báo cáo ở trên, chỉ log
+    # thêm): micro-F1 phía trên có thể "đẹp" trong khi model gần như bỏ rơi
+    # label hiếm — xem README mục đề xuất cải tiến (Tier B2).
+    bucket_report = macro_and_bucket_report(actual, pred, threshold=t)
+    bucket_msg = (
+        f"macro_f1={bucket_report['macro_f1']:.4f} | "
+        f"rare(n={bucket_report['rare_n_labels']})_f1={bucket_report['rare_f1']} | "
+        f"medium(n={bucket_report['medium_n_labels']})_f1={bucket_report['medium_f1']} | "
+        f"common(n={bucket_report['common_n_labels']})_f1={bucket_report['common_f1']}"
+    )
+    logger.info(bucket_msg)
+    print(bucket_msg)
+
 
     # ROC curve
     plt.figure()

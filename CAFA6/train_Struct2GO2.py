@@ -17,6 +17,7 @@ import dgl
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from sklearn.metrics import auc, roc_curve
@@ -24,7 +25,7 @@ from tqdm import tqdm
 from transformers import get_cosine_schedule_with_warmup
 
 from data_processing.divide_data import MyDataSet
-from model.evaluation import cacul_aupr, calculate_performance, roc_auc_flat
+from model.evaluation import cacul_aupr, calculate_performance, macro_and_bucket_report, roc_auc_flat
 from model.network import PPIEncoder, SAGNetworkHierarchical
 
 warnings.filterwarnings("ignore")
@@ -277,20 +278,73 @@ def labels_to_device(labels: torch.Tensor, device: torch.device) -> torch.Tensor
     return labels.to(device).float()
 
 
-def _estimate_pos_weight(train_dataset, label_dim: int, max_samples: int = 3000, cap: float = 50.0) -> float:
-    """Tỷ lệ neg/pos trên train — giúp AUPR (term hiếm) cho concat / no-ppi."""
-    pos = 0.0
-    total = 0.0
-    n = min(len(train_dataset), max_samples)
+def _estimate_pos_weight_vector(train_dataset, label_dim: int, cap: float = 100.0) -> torch.Tensor:
+    """pos_weight RIÊNG CHO TỪNG LABEL (không phải 1 số dùng chung cho mọi label
+    như bản cũ) — label hiếm được weight cao hơn nhiều so với label phổ biến,
+    đúng bản chất BCEWithLogitsLoss hỗ trợ pos_weight per-class sẵn có.
+
+    weight_i = (n - pos_i) / max(pos_i, 1), cap ở `cap` để tránh loss nổ khi
+    1 label gần như không có positive nào (hiếm khi xảy ra vì label_vocab_{ns}
+    đã lọc min-count trên train — xem split_protein_ids.py — nhưng vẫn có thể
+    lệch nhẹ vì train_dataset ở đây là sau khi lọc bỏ protein thiếu contact map).
+
+    Quét TOÀN BỘ train_dataset (đã nằm sẵn trong RAM, không tốn I/O) — không
+    sample 3000 như bản cũ, vì sample nhỏ dễ bỏ sót hẳn 1 label hiếm, dẫn tới
+    ước lượng sai ngay từ đầu.
+    """
+    n = len(train_dataset)
+    pos_counts = np.zeros(label_dim, dtype=np.float64)
     for i in range(n):
         sample = train_dataset[i]
         lbl = sample[2] if len(sample) > 2 else sample[1]
         arr = np.asarray(lbl, dtype=np.float64).reshape(-1)[:label_dim]
-        pos += float(arr.sum())
-        total += float(arr.size)
-    if pos <= 0:
-        return 1.0
-    return min((total - pos) / pos, cap)
+        pos_counts[: arr.shape[0]] += arr
+    neg_counts = n - pos_counts
+    with np.errstate(divide="ignore", invalid="ignore"):
+        weights = np.where(pos_counts > 0, neg_counts / np.maximum(pos_counts, 1), cap)
+    weights = np.clip(weights, 1.0, cap)
+    return torch.tensor(weights, dtype=torch.float32)
+
+
+class _MultiLabelFocalLoss(nn.Module):
+    """Focal loss (Lin et al., 2017) cho multi-label sigmoid — hạ trọng số các
+    mẫu/label model đã dự đoán tự tin đúng, dồn gradient vào mẫu/label khó
+    (thường là label hiếm) thay vì cần tự ước lượng pos_weight như BCE."""
+
+    def __init__(self, gamma: float = 2.0, alpha: float = 0.25):
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        targets = targets.float()
+        bce = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+        prob = torch.sigmoid(logits)
+        p_t = prob * targets + (1 - prob) * (1 - targets)
+        loss = bce * (1 - p_t).clamp(min=0).pow(self.gamma)
+        if self.alpha >= 0:
+            alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+            loss = alpha_t * loss
+        return loss.mean()
+
+
+def _build_criterion(args: argparse.Namespace, train_dataset, labels_num: int, device, logger) -> nn.Module:
+    """Chọn hàm loss theo --loss (bce | bce_pos_weight | focal). Nếu --loss không
+    truyền, suy ra từ --pos-weight/--no-pos-weight (tương thích ngược với script/
+    lệnh cũ chỉ biết --pos-weight, vd. scripts/run_fusion_ablation.py)."""
+    loss_name = args.loss or ("bce_pos_weight" if args.pos_weight else "bce")
+    if loss_name == "focal":
+        logger.info(f"loss=focal (gamma={args.focal_gamma}, alpha={args.focal_alpha})")
+        return _MultiLabelFocalLoss(gamma=args.focal_gamma, alpha=args.focal_alpha)
+    if loss_name == "bce_pos_weight":
+        weights = _estimate_pos_weight_vector(train_dataset, labels_num, cap=args.pos_weight_cap)
+        logger.info(
+            f"loss=bce_pos_weight (per-label, cap={args.pos_weight_cap}, "
+            f"min={weights.min():.2f}, max={weights.max():.2f}, mean={weights.mean():.2f})"
+        )
+        return nn.BCEWithLogitsLoss(pos_weight=weights.to(device))
+    logger.info("loss=bce (không weight)")
+    return nn.BCEWithLogitsLoss()
 
 
 def _ckpt_selection_score(fmax: float, aupr: float, metric: str) -> float:
@@ -380,6 +434,25 @@ def main():
         help="Tắt pos_weight kể cả khi preset --kaggle/baseline-parity tự bật.",
     )
     parser.add_argument(
+        "-pos_weight_cap", "--pos_weight_cap", type=float, default=100.0,
+        help="Trần weight cho 1 label khi --loss=bce_pos_weight (label càng hiếm weight càng cao, cap để tránh loss nổ)",
+    )
+    parser.add_argument(
+        "--loss",
+        choices=["bce", "bce_pos_weight", "focal"],
+        default=None,
+        help=(
+            "Hàm loss: bce (không weight) | bce_pos_weight (per-label, xem "
+            "--pos-weight/--pos_weight_cap) | focal (Lin et al. 2017, xem "
+            "-focal_gamma/-focal_alpha). Không truyền thì suy ra từ --pos-weight "
+            "(tương thích ngược): bật -> bce_pos_weight, tắt -> bce."
+        ),
+    )
+    parser.add_argument("-focal_gamma", "--focal_gamma", type=float, default=2.0,
+                        help="Focal loss gamma (mũ hạ trọng số mẫu dễ) — chỉ dùng khi --loss=focal")
+    parser.add_argument("-focal_alpha", "--focal_alpha", type=float, default=0.25,
+                        help="Focal loss alpha (trọng số lớp positive) — chỉ dùng khi --loss=focal")
+    parser.add_argument(
         "--ckpt-metric",
         choices=["auto", "fmax", "aupr", "combo"],
         default="auto",
@@ -458,7 +531,8 @@ def main():
         f"kaggle={args.kaggle}, baseline_parity={args.baseline_parity}, "
         f"use_ppi={args.use_ppi}, fusion_mode={args.fusion_mode}, "
         f"ppi_leakage_guard={args.ppi_leakage_guard}, "
-        f"ckpt_metric={ckpt_metric}, pos_weight={args.pos_weight}"
+        f"ckpt_metric={ckpt_metric}, pos_weight={args.pos_weight}, "
+        f"loss={args.loss or ('bce_pos_weight' if args.pos_weight else 'bce')}"
     )
     logger.info(
         f"epochs={args.epochs}, batch_size={args.batch_size}, dropout={args.dropout}, "
@@ -610,13 +684,7 @@ def main():
     lr_scheduler = get_cosine_schedule_with_warmup(
         optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps
     )
-    if args.pos_weight:
-        pw = _estimate_pos_weight(train_dataset, labels_num)
-        pos_weight = torch.full((labels_num,), pw, device=device, dtype=torch.float32)
-        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-        logger.info(f"pos_weight={pw:.2f} (neg/pos trên train, cap=50)")
-    else:
-        criterion = nn.BCEWithLogitsLoss()
+    criterion = _build_criterion(args, train_dataset, labels_num, device, logger)
     scaler = torch.cuda.amp.GradScaler(enabled=use_cuda and args.amp)
 
     best_fscore = 0.0
@@ -758,6 +826,16 @@ def main():
             logger.info(
                 f"threshold={thresh}, f_score={f_score}, auc={auc_score}, "
                 f"recall={recall}, precision={precision}, aupr={aupr}"
+            )
+            # Chẩn đoán mất cân bằng — không ảnh hưởng chọn checkpoint (vẫn theo
+            # ckpt_metric ở trên): micro-F1 phía trên có thể "đẹp" trong khi model
+            # gần như bỏ rơi label hiếm. Xem README mục đề xuất cải tiến (Tier B2).
+            bucket_report = macro_and_bucket_report(actual, pred, threshold=thresh)
+            logger.info(
+                f"macro_f1={bucket_report['macro_f1']:.4f} | "
+                f"rare(n={bucket_report['rare_n_labels']})_f1={bucket_report['rare_f1']} | "
+                f"medium(n={bucket_report['medium_n_labels']})_f1={bucket_report['medium_f1']} | "
+                f"common(n={bucket_report['common_n_labels']})_f1={bucket_report['common_f1']}"
             )
         else:
             logger.warning(f"epoch={epoch}: no valid F-score (empty pred/actual?)")

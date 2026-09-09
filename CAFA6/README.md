@@ -19,6 +19,7 @@ Mô hình dự đoán chức năng protein (Gene Ontology) kết hợp **3 ngu�
 3. [Pipeline xử lý dữ liệu — chi tiết từng script](#3-pipeline-xử-lý-dữ-liệu--chi-tiết-từng-script)
 4. [Huấn luyện (local & Kaggle)](#4-huấn-luyện-local--kaggle)
    - [4.5 Chống rò rỉ dữ liệu qua PPI (PPI leakage guard)](#45-chống-rò-rỉ-dữ-liệu-qua-ppi-ppi-leakage-guard)
+   - [4.6 Loss ablation: bce / bce_pos_weight / focal](#46-loss-ablation-bce--bce_pos_weight--focal)
 5. [Đánh giá](#5-đánh-giá)
 6. [Kiến trúc model](#6-kiến-trúc-model)
 7. [Xử lý sự cố](#7-xử-lý-sự-cố)
@@ -728,7 +729,10 @@ Xem hướng dẫn đầy đủ từng bước upload data → notebook tại [m
 | `--amp` | FP16 mixed precision (T4) | Tắt |
 | `--cache_ppi` | Encode PPI graph 1 lần/epoch | Bật |
 | `--no_ppi_leakage_guard` | Tắt PPI leakage guard (xem [mục 4.5](#45-chống-rò-rỉ-dữ-liệu-qua-ppi-ppi-leakage-guard)) | Guard **bật** mặc định |
-| `--pos-weight` / `--no-pos-weight` | BCE pos_weight từ train set — cải thiện AUPR/recall trên GO term hiếm | **Bật** trong preset `--kaggle`/baseline-parity (mặc định); tắt bằng `--no-pos-weight` |
+| `--pos-weight` / `--no-pos-weight` | Bật/tắt loss `bce_pos_weight` (xem [mục 4.6](#46-loss-ablation-bce--bce_pos_weight--focal)) — tương thích ngược, ưu tiên thấp hơn `--loss` | **Bật** trong preset `--kaggle`/baseline-parity (mặc định) |
+| `--loss` | `bce` \| `bce_pos_weight` \| `focal` — ghi đè `--pos-weight` nếu truyền | Suy ra từ `--pos-weight` nếu không truyền |
+| `-pos_weight_cap` | Trần weight/label khi `--loss=bce_pos_weight` | `100.0` |
+| `-focal_gamma` / `-focal_alpha` | Tham số focal loss khi `--loss=focal` | `2.0` / `0.25` |
 | `--cpu` | Bắt buộc CPU | Tắt |
 | `--kaggle` | Preset T4 (bảng trên) | Tắt |
 
@@ -820,6 +824,55 @@ python train_Struct2GO2.py -branch mf --no_ppi_leakage_guard
 Dùng flag này khi muốn tái tạo số liệu transductive cũ (trước khi có guard) để đối
 chiếu — **không khuyến nghị dùng cho kết quả báo cáo chính thức**, vì F-max sẽ bị
 thổi phồng do leak.
+
+---
+
+### 4.6 Loss ablation: `bce` / `bce_pos_weight` / `focal`
+
+**Vấn đề:** BCE thường (không weight) học rất tốt label phổ biến nhưng gần như
+bỏ rơi GO term hiếm — gradient từ hàng nghìn mẫu âm (label=0) áp đảo vài chục
+mẫu dương hiếm hoi. `--pos-weight` (bản cũ) có cải thiện nhưng dùng **1 số
+chung cho mọi label** (trung bình neg/pos toàn bộ) — label rất hiếm vẫn bị
+under-weight so với nhu cầu thực, label khá phổ biến lại bị over-weight.
+
+**3 lựa chọn qua `--loss`:**
+
+| `--loss` | Cách hoạt động | Khi nào dùng |
+|---|---|---|
+| `bce` | `BCEWithLogitsLoss` trơn, không weight | Baseline so sánh |
+| `bce_pos_weight` (mặc định khi `--pos-weight` bật) | `pos_weight` **RIÊNG CHO TỪNG LABEL** = neg/pos của chính label đó trên train, cap ở `-pos_weight_cap` (mặc định 100) | Khuyến nghị mặc định — đã bật sẵn qua preset (mục 4.4) |
+| `focal` | Focal loss (Lin et al. 2017): hạ trọng số mẫu/label dự đoán tự tin đúng, dồn gradient vào mẫu khó — không cần tự ước lượng pos_weight | Thử khi `bce_pos_weight` vẫn chưa đủ cải thiện recall label hiếm |
+
+```bash
+python train_Struct2GO2.py -branch mf --loss bce            # baseline không weight
+python train_Struct2GO2.py -branch mf --loss bce_pos_weight # mặc định (per-label)
+python train_Struct2GO2.py -branch mf --loss focal -focal_gamma 2.0 -focal_alpha 0.25
+```
+
+**Ablation qua `scripts/run_fusion_ablation.py`:** thêm `--loss` để áp DÙNG CHUNG
+cho mọi config fusion trong 1 lần chạy (không nhân chéo fusion × loss — tránh nổ
+số run). Muốn so 2 loss thì chạy script 2 lần:
+```bash
+python scripts/run_fusion_ablation.py --configs ppi_attn --loss bce_pos_weight
+python scripts/run_fusion_ablation.py --configs ppi_attn --loss focal
+```
+Checkpoint được thêm hậu tố `_{loss}` khi `--loss` truyền tường minh (vd.
+`bestmodel_mf_ppi_attn_96_0.0001_0.1_focal.pkl`) — không đè lên checkpoint mặc
+định.
+
+**Chẩn đoán label hiếm có bị bỏ rơi không (không phụ thuộc `--loss` nào):**
+`train_Struct2GO2.py` (mỗi lần validate) và `eval_Struct2GO2.py` (báo cáo cuối)
+giờ tự log thêm macro-F1 + F1 trung bình theo 3 nhóm tần suất label
+(rare/medium/common, tính trên số positive quan sát được trong chính split
+đang đánh giá):
+```
+macro_f1=0.1872 | rare(n=140)_f1=0.0421 | medium(n=95)_f1=0.2103 | common(n=93)_f1=0.4890
+```
+Đây CHỈ để chẩn đoán — không thay đổi cách chọn checkpoint (vẫn theo
+`--ckpt-metric` như trước, mặc định micro F-max/AUPR). Macro-F1 thấp hơn nhiều
+so với micro-F1 (F-max) trong log train/eval là dấu hiệu model đang học tốt
+label phổ biến nhưng kém với label hiếm — nếu vậy, cân nhắc thử `--loss focal`
+hoặc tăng `-pos_weight_cap`.
 
 ---
 
