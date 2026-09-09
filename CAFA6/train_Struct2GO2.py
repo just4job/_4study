@@ -428,6 +428,7 @@ def main():
     test_data_path = f"{data_dir}/divided_data/{args.branch}_test_dataset"
     label_network_path = f"{data_dir}/proceed_data/label_{args.branch}_network"
     ppi_graph_path = f"{data_dir}/proceed_data/ppi_graph_global"
+    ppi_graph_train_path = f"{data_dir}/proceed_data/ppi_graph_train_{args.branch}"
 
     logger = create_logger(args.branch, data_dir)
     ckpt_metric = _resolve_ckpt_metric(args)
@@ -467,23 +468,41 @@ def main():
 
         train_ppi_graph = ppi_graph
         if args.ppi_leakage_guard:
-            hidden_ids = _collect_ppi_node_ids(valid_dataset)
-            if Path(test_data_path).is_file():
-                test_dataset_for_mask = _load_pickle(test_data_path)
-                hidden_ids |= _collect_ppi_node_ids(test_dataset_for_mask)
-                del test_dataset_for_mask
-            else:
-                logger.warning(
-                    f"[ppi-leak-guard] Không tìm thấy {test_data_path} — chỉ ẩn được node "
-                    "valid, chưa chắc chắn ẩn hết node test. Chạy divide_data.py để có "
-                    "test_dataset đầy đủ."
+            if Path(ppi_graph_train_path).is_file():
+                # Build-time guard: ppi_graph_train_{branch} đã được sinh sẵn bởi
+                # data_processing/4_build_ppi_graph.py (sau split_protein_ids.py) —
+                # nhẹ + nhanh hơn nhiều so với mask lúc runtime, đặc biệt trên Kaggle
+                # vì KHÔNG cần load {branch}_test_dataset (pickle nặng) chỉ để lấy
+                # ppi_node_id. Xem README mục 4.5.
+                print(f"Loading pre-built train-only PPI graph: {ppi_graph_train_path} ...", flush=True)
+                train_ppi_graph = _load_pickle(ppi_graph_train_path).to(device)
+                logger.info(
+                    f"[ppi-leak-guard] dùng ppi_graph_train_{args.branch} đã build sẵn: "
+                    f"giữ {train_ppi_graph.num_edges():,}/{ppi_graph.num_edges():,} cạnh "
+                    "(build-time; dùng --no_ppi_leakage_guard để tắt)"
                 )
-            train_ppi_graph = build_train_only_ppi_graph(ppi_graph, hidden_ids)
-            logger.info(
-                f"[ppi-leak-guard] train-only PPI subgraph: giữ {train_ppi_graph.num_edges():,}/"
-                f"{ppi_graph.num_edges():,} cạnh, ẩn {len(hidden_ids):,} node valid/test "
-                "(dùng --no_ppi_leakage_guard để tắt)"
-            )
+            else:
+                # Fallback runtime: chưa chạy split_protein_ids.py + 4_build_ppi_graph.py
+                # theo pipeline mới → tự mask trong RAM như cũ (cần load test_dataset).
+                hidden_ids = _collect_ppi_node_ids(valid_dataset)
+                if Path(test_data_path).is_file():
+                    test_dataset_for_mask = _load_pickle(test_data_path)
+                    hidden_ids |= _collect_ppi_node_ids(test_dataset_for_mask)
+                    del test_dataset_for_mask
+                else:
+                    logger.warning(
+                        f"[ppi-leak-guard] Không tìm thấy {test_data_path} — chỉ ẩn được node "
+                        "valid, chưa chắc chắn ẩn hết node test. Chạy divide_data.py để có "
+                        "test_dataset đầy đủ."
+                    )
+                train_ppi_graph = build_train_only_ppi_graph(ppi_graph, hidden_ids)
+                logger.info(
+                    f"[ppi-leak-guard] không thấy ppi_graph_train_{args.branch} đã build sẵn — "
+                    f"mask lúc runtime (fallback, chậm/tốn RAM hơn — khuyến nghị chạy "
+                    "data_processing/split_protein_ids.py rồi 4_build_ppi_graph.py để build "
+                    f"sẵn trên máy local): giữ {train_ppi_graph.num_edges():,}/"
+                    f"{ppi_graph.num_edges():,} cạnh, ẩn {len(hidden_ids):,} node valid/test"
+                )
         else:
             logger.warning(
                 "[ppi-leak-guard] TẮT (--no_ppi_leakage_guard) — PPIEncoder sẽ thấy toàn bộ "

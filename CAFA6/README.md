@@ -53,15 +53,17 @@ D:\CAFA6\
 ├── data_processing\
 │   ├── 1_get_valid_ids.py              ← Bước 1: lấy danh sách protein ID hợp lệ
 │   ├── go_anno.py                      ← Bước 2: parse GO annotation → JSON
+│   ├── split_protein_ids.py            ← Bước 2b: chia train/valid/test SỚM (chống leak)
+│   ├── split_utils.py                  ← Hàm chia split dùng chung (không tự chạy)
 │   ├── 2_extract_struct_map.py         ← Bước 3: PDB.gz → contact map edge list  ✓ DÙNG CÁI NÀY
 │   ├── predicted_protein_struct2map.py ← (script cũ, path Linux, không dùng)
 │   ├── get_sequence.py                 ← Bước 4a: PDB → one-hot sequence (26-dim)
 │   ├── seq2vec.py                      ← Bước 4b: FASTA → SeqVec embedding (1024-dim)
 │   ├── read_seqvec_features.py         ← Bước 4c: chuẩn hóa SeqVec → dict pickle
 │   ├── 3_uniprot_mapping.py            ← Bước 5: ENSP ID trong ppi.txt → UniProtKB AC
-│   ├── 4_build_ppi_graph.py            ← Bước 6: xây PPI global DGL graph
-│   ├── 3_build_graph_dataset.py        ← Bước 7: ghép tất cả → dataset pickle
-│   ├── divide_data.py                  ← Bước 8: chia train/valid/test
+│   ├── 4_build_ppi_graph.py            ← Bước 6: xây PPI global DGL graph + ppi_graph_train_{ns}
+│   ├── 3_build_graph_dataset.py        ← Bước 7: ghép tất cả → dataset pickle (label_network chỉ từ train)
+│   ├── divide_data.py                  ← Bước 8: chia train/valid/test (đọc lại split_{ns}.json)
 │   └── sort.py                         ← (tiện ích sắp xếp edge file, dùng nếu cần)
 │
 ├── model\
@@ -97,7 +99,10 @@ D:\raw_data\goa_human.gaf.gz        │
     │ Bước 2                        │
     ▼                               │
 proceed_data\human_{BP/MF/CC}_ACS.json
-                                    │
+    │ Bước 2b (SỚM — chống leak)     │
+    ▼                               │
+proceed_data\split_{bp/mf/cc}.json  │  ({"train":[...], "valid":[...], "test":[...]})
+    │                               │
 D:\raw_data\seq.fasta               │
     │ Bước 4                        │
     ▼                               │
@@ -108,17 +113,19 @@ D:\raw_data\ppi.txt                 │
     │ Bước 5                        │
     ▼                               │
 proceed_data\uniprot_ensembl_mapping.csv
-    │ Bước 6                        │
+    │ Bước 6 (đọc split_{ns}.json)   │
     ▼                               │
 proceed_data\ppi_graph_global  ◄────┤
 proceed_data\ppi_protein_index      │
-                                    │ Bước 7
+proceed_data\ppi_graph_train_{ns}   │  (đã ẩn cạnh valid/test — dùng khi train)
+                                    │ Bước 7 (đọc split_{ns}.json cho label_network)
                                     ▼
                     proceed_data\emb_graph_{ns}
                     proceed_data\emb_seq_feature_{ns}
                     proceed_data\emb_label_{ns}
                     proceed_data\emb_ppi_node_id_{ns}
-                                    │ Bước 8
+                    proceed_data\label_{ns}_network      (chỉ tính từ protein train)
+                                    │ Bước 8 (đọc lại split_{ns}.json, giao với emb_graph)
                                     ▼
                     divided_data\{ns}_{train/valid/test}_dataset
                                     │
@@ -180,16 +187,23 @@ mkdir D:\CAFA6\test_result
 |:---:|---|---|:---:|
 | 1 | `1_get_valid_ids.py` | `valid_protein_ids.csv` | vài phút |
 | 2 | `go_anno.py` | `HUMAN_protein_info.json` | 5–15 phút |
+| **2b** | **`split_protein_ids.py`** | **`split_{bp,mf,cc}.json`** | **vài giây** |
 | 3 | `2_extract_struct_map.py` | `proteins_edges/*.txt` | vài giờ (tùy số PDB) |
 | 4a | `get_sequence.py` | `protein_node2onehot` | vài giờ |
 | 4b | `seq2vec.py` hoặc ESM-2 | `9606-avg-emb.pkl` | vài giờ |
 | 4c | `read_seqvec_features.py` | `dict_sequence_feature` | vài phút |
 | 5 | `3_uniprot_mapping.py` | `uniprot_ensembl_mapping.csv` | 10–30 phút |
-| 6 | `4_build_ppi_graph.py` | `ppi_graph_global`, `ppi_protein_index` | 5–20 phút |
-| 7 | `3_build_graph_dataset.py` | `emb_graph_*`, `emb_seq_feature_*`, … | 30–90 phút |
-| 8 | `divide_data.py` | `divided_data/*_dataset` | vài phút |
+| 6 | `4_build_ppi_graph.py` | `ppi_graph_global`, `ppi_protein_index`, `ppi_graph_train_*` | 5–20 phút |
+| 7 | `3_build_graph_dataset.py` | `emb_graph_*`, `emb_seq_feature_*`, `label_*_network` (chỉ từ train), … | 30–90 phút |
+| 8 | `divide_data.py` | `divided_data/*_dataset` (đọc lại `split_{ns}.json`) | vài phút |
 | — | `pack_for_kaggle.py` (nếu lên Kaggle) | `kaggle_data.zip` | vài phút |
 | Train | `train_Struct2GO2.py` | `save_models/bestmodel_*.pkl` | xem mục 4 / 8 |
+
+> **Bước 2b bắt buộc phải chạy TRƯỚC bước 6 và 7** để 2 bước đó build được
+> `ppi_graph_train_*` và `label_*_network` "sạch" (chỉ từ train) — nếu bỏ qua,
+> pipeline vẫn chạy được nhưng rơi về hành vi cũ (tính từ toàn bộ dữ liệu, có
+> cảnh báo `[WARN]` in ra) và `train_Struct2GO2.py` sẽ phải tự mask PPI lúc
+> runtime (chậm hơn). Xem [mục 4.5](#45-chống-rò-rỉ-dữ-liệu-qua-ppi-ppi-leakage-guard).
 
 ---
 
@@ -253,6 +267,58 @@ D:\CAFA6\proceed_data\HUMAN_protein_info.json
 ```bash
 python data_processing/go_anno.py
 ```
+
+---
+
+### Bước 2b — Chia train/valid/test theo protein ID (SỚM — chống leak)
+
+**Script:** `data_processing/split_protein_ids.py`
+
+**Vì sao đặt ở đây, không để cuối như bước 8 (pipeline cũ):** bước 6
+(`4_build_ppi_graph.py`) và bước 7 (`3_build_graph_dataset.py`) tính ra 2
+artifact — `ppi_graph_global` và `label_{ns}_network` — mà nếu chạy TRƯỚC khi
+biết protein nào thuộc train/valid/test thì buộc phải dùng TOÀN BỘ dữ liệu,
+gây rò rỉ gián tiếp thống kê valid/test vào lúc train (xem
+[mục 4.5](#45-chống-rò-rỉ-dữ-liệu-qua-ppi-ppi-leakage-guard)). Chạy bước này
+sớm để bước 6/7 có thể tự lọc "chỉ tính từ train".
+
+**Làm gì:** Với mỗi nhánh GO (bp/mf/cc), đọc danh sách protein có annotation
+(`human_{NS}_ACS.json`), chia ngẫu nhiên 70/20/10 (seed cố định, mặc định 42)
+thành train/valid/test, lưu ra 1 file JSON nhỏ.
+
+**Input:**
+```
+D:\CAFA6\proceed_data\human_BP_ACS.json
+D:\CAFA6\proceed_data\human_MF_ACS.json
+D:\CAFA6\proceed_data\human_CC_ACS.json
+```
+
+**Output:**
+```
+D:\CAFA6\proceed_data\split_bp.json
+D:\CAFA6\proceed_data\split_mf.json
+D:\CAFA6\proceed_data\split_cc.json
+    {
+      "seed": 42, "train_ratio": 0.7, "valid_ratio": 0.2,
+      "train": ["A0A0A0MRZ7", ...], "valid": [...], "test": [...]
+    }
+```
+
+**Chạy:**
+```bash
+python data_processing/split_protein_ids.py
+```
+
+> **Lưu ý:** đây là split trên tập "protein có GO annotation" — TẬP LỚN HƠN
+> tập protein cuối cùng thực sự có đủ dữ liệu (`emb_graph_{ns}`, sau khi bước
+> 3/7 lọc bỏ protein thiếu contact map). Bước 8 (`divide_data.py`) sẽ tự **giao**
+> (intersect) split này với `emb_graph_{ns}.keys()` để ra dataset cuối cùng —
+> 1 protein bị bỏ vì thiếu contact map thì bỏ ở cả 3 tập, không đổi nhóm
+> train/valid/test của các protein còn lại.
+>
+> **`--seed` phải khớp** giữa `split_protein_ids.py` và `divide_data.py` nếu
+> Dương từng đổi seed thủ công — mặc định cả 2 đều là `42` nên không cần làm
+> gì thêm trong trường hợp thông thường.
 
 ---
 
@@ -424,7 +490,7 @@ python data_processing/3_uniprot_mapping.py
 
 **Script:** `data_processing/4_build_ppi_graph.py`
 
-**Làm gì:** Lọc cạnh PPI có `combined_score ≥ 700`, map ENSP → UniProt (dùng CSV từ bước 5), chỉ giữ protein có trong GO annotation. Xây `dgl.DGLGraph` toàn cục: node = protein, edge = PPI interaction (vô hướng). Gắn 1024-dim sequence embedding làm node feature ban đầu.
+**Làm gì:** Lọc cạnh PPI có `combined_score ≥ 700`, map ENSP → UniProt (dùng CSV từ bước 5), chỉ giữ protein có trong GO annotation. Xây `dgl.DGLGraph` toàn cục: node = protein, edge = PPI interaction (vô hướng). Gắn 1024-dim sequence embedding làm node feature ban đầu. Nếu đã chạy **bước 2b** (`split_protein_ids.py`), script còn build thêm — cho mỗi nhánh có `split_{ns}.json` — 1 bản `ppi_graph_train_{ns}` đã **ẩn mọi cạnh chạm tới protein valid/test** của nhánh đó (dùng khi train, xem [mục 4.5](#45-chống-rò-rỉ-dữ-liệu-qua-ppi-ppi-leakage-guard)). Bỏ qua bước 2b vẫn chạy được — chỉ là không có `ppi_graph_train_{ns}`, và `train_Struct2GO2.py` sẽ tự mask lúc runtime (chậm hơn).
 
 **⚠️ Sửa tên file PPI** trong script (dòng 34) — hiện trỏ đến `9606.protein.links.v12.0.txt` nhưng file thực là `ppi.txt`:
 
@@ -449,10 +515,14 @@ D:\CAFA6\proceed_data\ppi_graph_global
 
 D:\CAFA6\proceed_data\ppi_protein_index
     {UniProtKB_AC → node_id (int)}
+
+D:\CAFA6\proceed_data\ppi_graph_train_{bp,mf,cc}   (chỉ tạo nếu có split_{ns}.json)
+    dgl.DGLGraph — giống ppi_graph_global nhưng đã cắt cạnh chạm tới valid/test
 ```
 
-**Chạy:**
+**Chạy (nhớ chạy `split_protein_ids.py` — bước 2b — trước để có `ppi_graph_train_*`):**
 ```bash
+python data_processing/split_protein_ids.py
 python data_processing/4_build_ppi_graph.py
 ```
 
@@ -493,6 +563,7 @@ D:\CAFA6\proceed_data\protein_node2onehot       (bước 4a, 26-dim)
 D:\CAFA6\proceed_data\dict_sequence_feature     (bước 4c, 1024-dim)
 D:\CAFA6\proceed_data\ppi_protein_index         (bước 6)
 D:\CAFA6\proceed_data\human_{BP/MF/CC}_ACS.json (bước 2)
+D:\CAFA6\proceed_data\split_{ns}.json           (bước 2b, nếu có — lọc label_network)
 ```
 
 **Output (tạo cho cả 3 nhánh bp / mf / cc):**
@@ -503,8 +574,8 @@ D:\CAFA6\proceed_data\human_{BP/MF/CC}_ACS.json (bước 2)
 | `emb_seq_feature_{ns}` | `{ID → Tensor}` sequence embedding | (1024,) |
 | `emb_label_{ns}` | `{ID → Tensor}` multi-hot GO label | (num_labels,) |
 | `emb_ppi_node_id_{ns}` | `{ID → int}` node index PPI graph | scalar, -1 nếu absent |
-| `label_vocab_{ns}.json` | `[GO_term_0, ...]` | list |
-| `label_{ns}_network` | `dgl.DGLGraph` co-occurrence GO label | — |
+| `label_vocab_{ns}.json` | `[GO_term_0, ...]` (từ TOÀN BỘ protein — không phải thống kê, không cần lọc) | list |
+| `label_{ns}_network` | `dgl.DGLGraph` co-occurrence GO label — **chỉ tính từ protein train** nếu có `split_{ns}.json`, ngược lại từ toàn bộ (in `[WARN]`) | — |
 
 **Chạy:**
 ```bash
@@ -517,7 +588,7 @@ python data_processing/3_build_graph_dataset.py
 
 **Script:** `data_processing/divide_data.py`
 
-**Làm gì:** Đọc dataset từ bước 7, chia ngẫu nhiên theo tỷ lệ **70% / 20% / 10%**, lưu thành 3 file pickle riêng cho mỗi nhánh. Mỗi sample là tuple `(protein_id, struct_graph, label, seq_feature, ppi_node_id)`.
+**Làm gì:** Nếu đã có `split_{ns}.json` (bước 2b), đọc lại đúng phân vùng đó và **giao** (intersect) với `emb_graph_{ns}.keys()` (loại protein bị bước 3/7 bỏ vì thiếu contact map). Nếu chưa có `split_{ns}.json` (pipeline cũ), fallback: tự chia ngẫu nhiên 70/20/10 tại chỗ như trước (in `[WARN]`). Lưu thành 3 file pickle riêng cho mỗi nhánh. Mỗi sample là tuple `(protein_id, struct_graph, label, seq_feature, ppi_node_id)`.
 
 **Input:**
 ```
@@ -525,6 +596,7 @@ D:\CAFA6\proceed_data\emb_graph_{ns}
 D:\CAFA6\proceed_data\emb_seq_feature_{ns}
 D:\CAFA6\proceed_data\emb_label_{ns}
 D:\CAFA6\proceed_data\emb_ppi_node_id_{ns}
+D:\CAFA6\proceed_data\split_{ns}.json      (bước 2b, nếu có)
 ```
 
 **Output:**
@@ -533,6 +605,10 @@ D:\CAFA6\divided_data\{ns}_train_dataset
 D:\CAFA6\divided_data\{ns}_valid_dataset
 D:\CAFA6\divided_data\{ns}_test_dataset
 ```
+
+> **`--seed` chỉ còn dùng khi fallback** (chưa có `split_{ns}.json`). Khi đã
+> chạy bước 2b, `divide_data.py` đọc đúng phân vùng đã lưu — không random lại
+> — nên `--seed` truyền vào lúc này bị bỏ qua (không ảnh hưởng kết quả).
 
 **Chạy:**
 ```bash
@@ -646,40 +722,65 @@ PPI đang thuộc tập **valid/test** → model gián tiếp học được đ�
 feature) của protein valid/test ngay trong lúc train, dù nhãn (label) của chúng
 không hề bị lộ trực tiếp. Đây là kiểu rò rỉ transductive: F-max đo trên valid/test
 sẽ lạc quan hơn so với kịch bản thực tế (dự đoán cho 1 protein hoàn toàn mới, chưa
-biết PPI của nó).
+biết PPI của nó). `label_{ns}_network` (bước 7, co-occurrence GO term) có cùng vấn
+đề nếu tính từ toàn bộ dữ liệu, dù hiện chưa dùng trong forward mặc định.
 
-**Cách xử lý — bán-inductive hoá PPI:** `train_Struct2GO2.py` giờ tự động dựng thêm
-1 bản sao `ppi_graph_global` gọi là **`train_ppi_graph`**, trong đó mọi cạnh có
-**ít nhất 1 đầu là node valid hoặc test** (lấy từ `{branch}_valid_dataset` +
-`{branch}_test_dataset`) đều bị cắt. Node valid/test vẫn tồn tại trong graph (giữ
-nguyên feature) nhưng bị cô lập — không còn cạnh nào để GraphSAGE lan truyền message
-qua chúng.
+**Cách xử lý — bán-inductive hoá PPI**, có **2 lớp**, ưu tiên lớp 1:
 
-- **Lúc train** (encode PPI đầu epoch + forward mỗi batch): dùng `train_ppi_graph`
-  (chỉ còn cạnh train↔train).
+**Lớp 1 — build-time (khuyến nghị, đặc biệt khi train trên Kaggle).** Chạy
+[Bước 2b](#bước-2b--chia-trainvalidtest-theo-protein-id-sớm--chống-leak)
+(`split_protein_ids.py`) TRƯỚC bước 6/7:
+- `4_build_ppi_graph.py` build sẵn `ppi_graph_train_{bp,mf,cc}` — bản `ppi_graph_global`
+  đã cắt mọi cạnh chạm tới protein valid/test của từng nhánh (đọc từ `split_{ns}.json`).
+- `3_build_graph_dataset.py` build `label_{ns}_network` **chỉ từ annotation của
+  protein train** (cũng đọc `split_{ns}.json`).
+- `train_Struct2GO2.py` thấy có `ppi_graph_train_{branch}` → load thẳng, dùng ngay
+  cho train — **không cần đọc `{branch}_test_dataset` nữa**, không tốn thời gian
+  mask mỗi lần chạy. Đây là lý do nên chạy bước 2b + 6/7 lại **trên máy local**
+  (nơi vốn đã xử lý data nặng), rồi để `pack_for_kaggle.py` đóng gói
+  `ppi_graph_train_*` + `split_*.json` cùng zip upload — Kaggle chỉ việc tải về
+  dùng, không phải tính lại (tiết kiệm RAM + thời gian mỗi lần chạy/resume Kaggle
+  session, vốn hay bị timeout).
+
+**Lớp 2 — runtime fallback (tự động, không cần làm gì).** Nếu KHÔNG tìm thấy
+`ppi_graph_train_{branch}` (chưa chạy bước 2b, hoặc dùng dữ liệu build theo pipeline
+cũ), `train_Struct2GO2.py` tự dựng `train_ppi_graph` trong RAM lúc chạy — cắt mọi
+cạnh có **ít nhất 1 đầu là node valid hoặc test** (lấy từ `{branch}_valid_dataset` +
+`{branch}_test_dataset`, phải load cả 2 pickle nên tốn RAM/thời gian hơn lớp 1).
+Node valid/test vẫn tồn tại trong graph (giữ nguyên feature) nhưng bị cô lập.
+
+Dù ở lớp nào:
+- **Lúc train** (encode PPI đầu epoch + forward mỗi batch): dùng graph đã ẩn cạnh
+  valid/test (`ppi_graph_train_{branch}` build-time, hoặc `train_ppi_graph` runtime).
 - **Lúc validate/test**: luôn dùng `ppi_graph_global` gốc (đầy đủ cạnh) — model được
   đánh giá đúng với PPI thật mà nó sẽ thấy khi suy luận.
-- Cơ chế này áp dụng cho cả 2 đường: GraphSAGE embedding (`encode_all_nodes`) *và*
-  bảng hàng xóm dùng trong cross-attention (`fusion_mode=attention`, mặc định) — cả
-  hai đều được dựng riêng cho `train_ppi_graph` và `ppi_graph_global` để không lẫn
-  cạnh của nhau.
+- Áp dụng cho cả 2 đường: GraphSAGE embedding (`encode_all_nodes`) *và* bảng hàng
+  xóm dùng trong cross-attention (`fusion_mode=attention`, mặc định) — cả hai đều
+  được dựng riêng cho graph-lúc-train và `ppi_graph_global` để không lẫn cạnh.
 
-**Mặc định: BẬT.** Không cần làm gì thêm — chạy `train_Struct2GO2.py` như bình
-thường sẽ tự áp dụng. Log sẽ in số cạnh giữ lại, ví dụ:
+**Mặc định: BẬT** (cả 2 lớp). Không cần làm gì thêm — chạy `train_Struct2GO2.py`
+như bình thường sẽ tự áp dụng lớp nào có sẵn dữ liệu. Log phân biệt rõ 2 lớp:
 
 ```
-[ppi-leak-guard] train-only PPI subgraph: giữ 812,340/1,050,220 cạnh, ẩn 18,532 node valid/test
+# Lớp 1 (build-time — đã chạy split_protein_ids.py + 4_build_ppi_graph.py):
+[ppi-leak-guard] dùng ppi_graph_train_mf đã build sẵn: giữ 812,340/1,050,220 cạnh (build-time; ...)
+
+# Lớp 2 (runtime fallback — chưa chạy bước 2b):
+[ppi-leak-guard] không thấy ppi_graph_train_mf đã build sẵn — mask lúc runtime (fallback, ...): giữ 812,340/1,050,220 cạnh, ẩn 18,532 node valid/test
 ```
 
-**Yêu cầu dữ liệu:** guard cần cả `{branch}_valid_dataset` **và**
-`{branch}_test_dataset` để biết node nào cần ẩn. Nếu thiếu `test_dataset` (vd. chạy
-`divide_data.py --only train` hoặc pack Kaggle với `--splits train valid`), guard
-vẫn chạy nhưng chỉ ẩn được node valid — log sẽ cảnh báo rõ và khuyến nghị chạy lại
-`divide_data.py` cho đủ 3 split trước khi train. `pack_for_kaggle.py` mặc định đã
-đóng gói cả `test` (`--splits train valid test`), nên workflow Kaggle chuẩn trong
-[mục 8](#8-huấn-luyện-trên-kaggle-t4-chi-tiết) không cần đổi gì.
+**Yêu cầu dữ liệu:**
+- Lớp 1 cần `proceed_data/split_{branch}.json` + `proceed_data/ppi_graph_train_{branch}`
+  (sinh ra bởi bước 2b + bước 6 — chạy 1 lần trên local, pack lên Kaggle).
+- Lớp 2 (fallback) cần cả `{branch}_valid_dataset` **và** `{branch}_test_dataset`. Nếu
+  thiếu `test_dataset` (vd. chạy `divide_data.py --only train`), guard vẫn chạy nhưng
+  chỉ ẩn được node valid — log cảnh báo rõ. `pack_for_kaggle.py` mặc định đã đóng gói
+  cả `test` (`--splits train valid test`) và cả `split_*.json`/`ppi_graph_train_*`
+  nếu chúng tồn tại lúc pack, nên workflow Kaggle chuẩn ở [mục 8](#8-huấn-luyện-trên-kaggle-t4-chi-tiết)
+  không cần đổi cell nào — `scripts/kaggle_link_data.py` symlink nguyên thư mục
+  `proceed_data/`, tự kéo theo các file mới.
 
-**Tắt guard (chỉ để so sánh/ablation với hành vi cũ):**
+**Tắt guard hoàn toàn (chỉ để so sánh/ablation với hành vi cũ):**
 ```bash
 python train_Struct2GO2.py -branch mf --no_ppi_leakage_guard
 ```
@@ -769,6 +870,23 @@ Guard vẫn chạy nhưng chỉ ẩn được node valid, không ẩn được n
 Chạy: python data_processing/divide_data.py --namespace {branch}
 Hoặc nếu đang ở Kaggle: kiểm tra kaggle_data.zip có pack đủ split "test" chưa
 (pack_for_kaggle.py mặc định --splits train valid test — đừng bỏ "test").
+
+Cách tốt hơn (build-time, không cần test_dataset trên Kaggle): chạy
+data_processing/split_protein_ids.py rồi 4_build_ppi_graph.py TRÊN MÁY LOCAL
+trước khi pack — train_Struct2GO2.py sẽ tự dùng ppi_graph_train_{branch} đã
+build sẵn thay vì mask lúc runtime. Xem mục 4.5.
+```
+
+**`[WARN] Chưa có split_{ns}.json — ...` (khi chạy 3_build_graph_dataset.py / 4_build_ppi_graph.py / divide_data.py)**
+```
+Đang chạy theo pipeline CŨ (chưa có bước 2b) — vẫn ra kết quả đúng nhưng
+label_network / ppi_graph không được "làm sạch" ở build-time. Chạy:
+  python data_processing/split_protein_ids.py
+rồi chạy LẠI (--force) 4_build_ppi_graph.py và 3_build_graph_dataset.py để có
+ppi_graph_train_{ns} + label_{ns}_network sạch. Lưu ý: split mới có thể khác
+với split trước đó (dùng seed khác universe protein) — checkpoint cũ train
+trên split cũ không còn so sánh 1:1 được với run mới, cần train lại nếu muốn
+số liệu nhất quán.
 ```
 
 **Dimension mismatch trong model**
@@ -807,14 +925,15 @@ Script tự retry. Nếu vẫn lỗi: giảm BATCH_SIZE = 200 trong 3_uniprot_ma
 ```bash
 python data_processing/1_get_valid_ids.py
 python data_processing/go_anno.py
+python data_processing/split_protein_ids.py          # Bước 2b — chống leak, chạy SỚM
 python data_processing/2_extract_struct_map.py
 python data_processing/get_sequence.py
 python data_processing/seq2vec.py -i D:/raw_data/seq.fasta -o D:/CAFA6/proceed_data/9606-avg-emb.pkl --model 150M --batch_size 4
 python data_processing/read_seqvec_features.py
 python data_processing/3_uniprot_mapping.py
-python data_processing/4_build_ppi_graph.py
-python data_processing/3_build_graph_dataset.py
-python data_processing/divide_data.py
+python data_processing/4_build_ppi_graph.py           # đọc split_{ns}.json -> ppi_graph_train_*
+python data_processing/3_build_graph_dataset.py       # đọc split_{ns}.json -> label_*_network chỉ từ train
+python data_processing/divide_data.py                 # đọc lại split_{ns}.json
 python train_Struct2GO2.py -branch mf -dropout 0.2
 python train_Struct2GO2.py -branch cc -dropout 0.2
 python train_Struct2GO2.py -branch bp  -dropout 0.1

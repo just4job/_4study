@@ -18,10 +18,22 @@ Output (per branch bp / mf / cc):
   proceed_data/emb_label_{ns}            ← {ID → torch.FloatTensor (num_labels,)}
   proceed_data/label_vocab_{ns}.json     ← list of GO terms (index → GO term)
   proceed_data/label_{ns}_network        ← dgl.DGLGraph của GO label co-occurrence
+                                            (CHỈ tính từ protein tập TRAIN — xem dưới)
+
+PPI leakage guard (build-time): nếu đã chạy split_protein_ids.py (Bước 2b) và có
+proceed_data/split_{ns}.json, label co-occurrence graph (label_{ns}_network) chỉ
+được tính từ annotation của protein thuộc tập TRAIN — tránh rò rỉ thống kê
+đồng-xuất-hiện GO term của valid/test vào 1 artifact dùng chung cho cả train lẫn
+inference. Vocabulary GO term (label_vocab_{ns}.json) vẫn lấy từ TOÀN BỘ protein
+(train+valid+test) — đây không phải "thống kê" bị leak, mà là danh sách nhãn khả
+dĩ, phải đủ để không bỏ sót nhãn chỉ xuất hiện ở valid/test. Nếu chưa có
+split_{ns}.json (pipeline cũ), fallback về hành vi cũ: tính từ toàn bộ protein
+(in cảnh báo) — xem README mục 4.5.
 """
 
 import json
 import pickle
+import sys
 import warnings
 from pathlib import Path
 
@@ -29,6 +41,10 @@ import dgl
 import numpy as np
 import torch
 from tqdm import tqdm
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from data_processing.split_utils import load_split
 
 warnings.filterwarnings("ignore")
 
@@ -201,9 +217,24 @@ for ns_type, acs_path in ACS_FILES.items():
         json.dump(all_go_terms, f, indent=2)
     print(f"  Lưu vocabulary → {vocab_path.name}")
 
-    # 3. Xây đồ thị label co-occurrence
-    print("  Đang xây label network...")
-    label_graph = build_label_graph(all_go_terms, protein_labels)
+    # 3. Xây đồ thị label co-occurrence — CHỈ từ protein tập TRAIN nếu có
+    #    split_{ns}.json (Bước 2b), tránh leak thống kê đồng-xuất-hiện của valid/test.
+    split = load_split(PROC_DIR, ns_type)
+    if split is not None:
+        train_ids = set(split["train"])
+        label_source = {pid: terms for pid, terms in protein_labels.items() if pid in train_ids}
+        print(
+            f"  Đang xây label network (chỉ từ {len(label_source):,}/{len(protein_labels):,} "
+            f"protein train, theo split_{ns_type}.json)..."
+        )
+    else:
+        label_source = protein_labels
+        print(
+            f"  [WARN] Chưa có split_{ns_type}.json — label network tính từ TOÀN BỘ "
+            f"{len(protein_labels):,} protein (train+valid+test). Chạy "
+            "split_protein_ids.py trước để tránh leak — xem README mục 4.5."
+        )
+    label_graph = build_label_graph(all_go_terms, label_source)
     label_net_path = PROC_DIR / f"label_{ns_type}_network"
     with open(label_net_path, "wb") as f:
         pickle.dump(label_graph, f)

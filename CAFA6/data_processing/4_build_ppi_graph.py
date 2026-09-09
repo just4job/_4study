@@ -11,20 +11,37 @@ Input:
 Output:
   proceed_data/ppi_graph_global             ← dgl.DGLGraph (nodes=protein, edges=PPI)
   proceed_data/ppi_protein_index            ← dict {UniProtKB_AC → node_id}
+  proceed_data/ppi_graph_train_{bp,mf,cc}   ← bản đã ẩn cạnh valid/test của từng nhánh
+                                               (chỉ tạo nếu đã chạy split_protein_ids.py
+                                               trước — xem README mục 4.5 / 3.Bước 2b)
 
 Node feature của PPI graph:
   - Mặc định: vector zero (1280-dim) — sẽ được cập nhật bởi GNN trong lúc train
   - Nếu có dict_sequence_feature → gắn seq embedding 1280-dim (ESM-2) làm initial node feature
+
+PPI leakage guard (build-time): ppi_graph_global LUÔN chứa toàn bộ protein (train+
+valid+test) — bắt buộc, vì valid/test vẫn cần có mặt trong đồ thị để model dùng PPI
+thật lúc suy luận. Cái được "chỉ tính từ train" là CẠNH nào PPIEncoder (GraphSAGE)
+được thấy lúc train: ppi_graph_train_{ns} là 1 bản sao ppi_graph_global nhưng đã cắt
+mọi cạnh chạm tới protein thuộc valid/test của nhánh đó (đọc từ split_{ns}.json, do
+split_protein_ids.py sinh ra). Nếu chưa chạy split_protein_ids.py, bước này bị bỏ qua
+(in cảnh báo) — train_Struct2GO2.py khi đó sẽ tự mask lúc runtime (chậm hơn nhưng vẫn
+đúng, xem README mục 4.5).
 """
 
 import csv
 import json
 import pickle
+import sys
 from pathlib import Path
 
 import dgl
 import numpy as np
 import torch
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from data_processing.split_utils import load_split
 
 # ── Cấu hình ─────────────────────────────────────────────────────────────────
 BASE_DIR   = Path("D:/CAFA6")
@@ -191,6 +208,50 @@ print(f"  Lưu PPI graph → {ppi_graph_path}")
 with open(ppi_index_path, "wb") as f:
     pickle.dump(protein_index, f)
 print(f"  Lưu protein index → {ppi_index_path}")
+
+
+def _build_train_only_ppi_graph(full_graph: dgl.DGLGraph, hidden_node_ids: set[int]) -> dgl.DGLGraph:
+    """Cắt mọi cạnh chạm tới hidden_node_ids (protein valid/test của 1 branch).
+    Giữ nguyên số node + node feature — chỉ hidden_node_ids bị cô lập (mất cạnh).
+    Cùng logic với train_Struct2GO2.build_train_only_ppi_graph() (bản runtime-fallback).
+    """
+    if not hidden_node_ids:
+        return full_graph
+    num_nodes = full_graph.num_nodes()
+    hidden_idx = torch.as_tensor(sorted(hidden_node_ids), dtype=torch.long)
+    hidden_idx = hidden_idx[hidden_idx < num_nodes]
+    hidden_mask = torch.zeros(num_nodes, dtype=torch.bool)
+    hidden_mask[hidden_idx] = True
+    src, dst = full_graph.edges()
+    keep_eids = (~(hidden_mask[src] | hidden_mask[dst])).nonzero(as_tuple=True)[0]
+    masked = dgl.edge_subgraph(full_graph, keep_eids, relabel_nodes=False)
+    masked.ndata["feat"] = full_graph.ndata["feat"]
+    return masked
+
+
+# ── Bước 8 (build-time PPI leakage guard) ────────────────────────────────────
+# Với mỗi branch đã có split_{ns}.json (từ split_protein_ids.py — chạy TRƯỚC
+# bước này), sinh sẵn 1 bản ppi_graph đã ẩn cạnh valid/test — để
+# train_Struct2GO2.py không phải tự mask lúc runtime (nhanh + nhẹ RAM hơn,
+# đặc biệt trên Kaggle vì không cần load {branch}_test_dataset chỉ để lấy
+# ppi_node_id). Xem README mục 4.5.
+print("\nBước 8 — Build ppi_graph_train_{bp,mf,cc} từ split_{ns}.json (nếu có)...")
+for ns in ("bp", "mf", "cc"):
+    split = load_split(PROC_DIR, ns)
+    if split is None:
+        print(f"  [SKIP] {ns}: chưa có split_{ns}.json — chạy split_protein_ids.py trước "
+              f"(train_Struct2GO2.py sẽ tự mask lúc runtime thay thế)")
+        continue
+    hidden_acs = set(split["valid"]) | set(split["test"])
+    hidden_ids = {protein_index[ac] for ac in hidden_acs if ac in protein_index}
+    train_graph = _build_train_only_ppi_graph(ppi_graph, hidden_ids)
+    out_path = PROC_DIR / f"ppi_graph_train_{ns}"
+    with open(out_path, "wb") as f:
+        pickle.dump(train_graph, f)
+    print(
+        f"  {ns}: giữ {train_graph.num_edges():,}/{ppi_graph.num_edges():,} cạnh, "
+        f"ẩn {len(hidden_ids):,} node valid/test → {out_path}"
+    )
 
 print("\n" + "=" * 60)
 print("Hoàn thành! Tiếp theo: chạy lại 3_build_graph_dataset.py để thêm ppi_node_id")
