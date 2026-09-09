@@ -95,9 +95,13 @@ def main() -> int:
     parser.add_argument(
         "--configs",
         nargs="+",
-        default=[c.name for c in FUSION_CONFIGS],
+        default=["ppi_concat", "no_ppi_attn"],
         choices=[c.name for c in FUSION_CONFIGS],
-        help="ppi_concat | no_ppi_attn",
+        help=(
+            "Mặc định chỉ B (ppi_concat) + C (no_ppi_attn) — đúng mục đích script này. "
+            "run_fusion_ablation.py giờ có thêm ppi_attn (1 chiều) / ppi_bi_attn (2 chiều); "
+            "truyền tay --configs nếu muốn retrain thêm 2 hướng đó qua script này."
+        ),
     )
     parser.add_argument(
         "--profile",

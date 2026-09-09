@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Train + eval ablation fusion — 3 nhánh × 2 hướng, epoch/lr tối ưu theo profile.
+"""Train + eval ablation fusion — 3 nhánh × 4 hướng, epoch/lr tối ưu theo profile.
 
-Hướng 1: PPI + concat          (--fusion concat)
-Hướng 2: không PPI + attention (--no-ppi --fusion attention)
+Hướng 1: PPI + concat                    (--fusion concat)
+Hướng 2: không PPI + attention            (--no-ppi --fusion attention)
+Hướng 3: PPI + attention 1 CHIỀU          (--fusion attention)      — struct+seq
+         làm Query cố định, PPI chỉ là Key/Value tĩnh (không được cập nhật).
+Hướng 4: PPI + attention 2 CHIỀU          (--fusion bi_attention)   — struct/seq/PPI
+         gộp thành 1 chuỗi token, self-attention đối xứng: PPI cũng được struct/seq
+         cập nhật ngược lại (xem model/layer.py:BidirectionalCrossAttention).
 
-Hai hướng dùng **cùng** epoch / lr / batch / dropout trên mỗi nhánh → so sánh công bằng.
+Cả 4 hướng dùng **cùng** epoch / lr / batch / dropout trên mỗi nhánh → so sánh công bằng.
+Muốn chạy ít hướng hơn (vd. chỉ so 1 chiều vs 2 chiều): `--configs ppi_attn ppi_bi_attn`.
 
 Profiles (--profile):
   fast      ~15–25 ph/nhánh/hướng  (tổng ~2–3 h cho 6 run)
@@ -81,9 +87,11 @@ class FusionConfig:
 FUSION_CONFIGS: tuple[FusionConfig, ...] = (
     FusionConfig("ppi_concat", use_ppi=True, fusion_mode="concat"),
     FusionConfig("no_ppi_attn", use_ppi=False, fusion_mode="attention"),
+    FusionConfig("ppi_attn", use_ppi=True, fusion_mode="attention"),      # 1 chiều
+    FusionConfig("ppi_bi_attn", use_ppi=True, fusion_mode="bi_attention"),  # 2 chiều
 )
 
-# epoch / lr / validate — tối ưu thời gian; **giống nhau** cho 2 hướng trên cùng nhánh
+# epoch / lr / validate — tối ưu thời gian; **giống nhau** cho mọi hướng trên cùng nhánh
 PROFILES: dict[str, dict[str, BranchHP]] = {
     "fast": {
         "mf": BranchHP(epochs=8, learningrate=1e-4, validate_every=4, batch_size=64, est_minutes=18),
@@ -260,7 +268,7 @@ def _print_profile_table(profile: str, branches: list[str]) -> None:
             f"{hp.validate_every:>10} {hp.est_minutes:>6}"
         )
         total += hp.est_minutes * len(FUSION_CONFIGS)
-    print(f"Ước lượng tổng (2 hướng × {len(branches)} nhánh): ~{total} phút\n")
+    print(f"Ước lượng tổng ({len(FUSION_CONFIGS)} hướng × {len(branches)} nhánh): ~{total} phút\n")
 
 
 def _compare_branch(results: list[dict], branch: str) -> None:
@@ -285,7 +293,7 @@ def _compare_branch(results: list[dict], branch: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Ablation fusion: PPI+concat vs no-PPI+attention (3 nhánh)",
+        description="Ablation fusion: concat vs attention 1 chiều vs attention 2 chiều vs no-PPI (3 nhánh)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--data-dir", default=None)

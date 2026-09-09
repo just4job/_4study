@@ -822,8 +822,34 @@ Sơ đồ chi tiết (phong cách paper, 3 nhánh + Cross-Attention):
 1. **Protein Structure** — contact map (AlphaFold PDB, Cα < 8Å) → `ConvPoolBlock` × N (GCN + SAGPool + Readout) → vector `[hid×2]`.
 2. **Protein Sequence** — ESM-2 / SeqVec → Average pooling → `[seq_dim]` (640).
 3. **PPI Network** — STRING `ppi.txt` → `PPIEncoder` (GraphSAGE × 2) → `[ppi_out]`.
-4. **Fusion** — `MultiModalCrossAttention`: struct + seq là **Query**, PPI là **Key/Value** → `[hid×2]`.
+4. **Fusion** — gộp struct + seq + PPI, 3 lựa chọn (`--fusion`), xem bảng dưới → `[hid×2]`.
 5. **Classifier** — Linear × 3 → xác suất GO term (MFO / CCO / BPO).
+
+### Cross-attention 1 chiều vs 2 chiều (`model/layer.py`)
+
+| | `--fusion attention` (mặc định) | `--fusion bi_attention` | `--fusion concat` |
+|---|---|---|---|
+| Class | `MultiModalCrossAttention` | `BidirectionalCrossAttention` | `ConcatFusion` |
+| Query | struct + seq (cố định) | — (self-attention, không Query/KV cố định) | — |
+| Key/Value | PPI (self + láng giềng) | — | — |
+| PPI có được cập nhật? | **Không** — chỉ là ngữ cảnh tĩnh cho struct/seq | **Có** — struct/seq/PPI gộp 1 chuỗi token, self-attention đối xứng nên PPI cũng nhận thông tin ngược từ struct/seq | N/A (không có attention) |
+| Hướng thông tin | 1 chiều: struct/seq ← PPI | 2 chiều: struct ↔ seq ↔ PPI | Không có tương tác qua lại — chỉ nối vector rồi qua MLP |
+| `out_dim` | `attn_dim × 2` | `attn_dim × 2` (cùng shape — thay thế trực tiếp cho nhau) | `hid_dim × 2` |
+
+Cả 2 class cross-attention có cùng chữ ký `forward(struct_feat, seq_feat, ppi_feat, ppi_key_padding_mask)` và cùng `out_dim`, nên đổi qua lại chỉ cần đổi `--fusion` — không phải sửa phần còn lại của model.
+
+**Chạy thử 1 nhánh với bi-directional:**
+```bash
+python train_Struct2GO2.py -branch mf --fusion bi_attention -epochs 5
+python eval_Struct2GO2.py -branch mf --fusion bi_attention --split test
+```
+
+**Ablation đầy đủ 4 hướng** (concat / no-PPI+attention / PPI+attention 1 chiều / PPI+attention 2 chiều) — xem [`scripts/run_fusion_ablation.py`](scripts/run_fusion_ablation.py) và [mục 8, "Ablation fusion"](kaggle_notebook.md) trong `kaggle_notebook.md`:
+```bash
+python scripts/run_fusion_ablation.py --profile balanced
+# Chỉ so 1 chiều vs 2 chiều (giữ PPI cả 2):
+python scripts/run_fusion_ablation.py --configs ppi_attn ppi_bi_attn
+```
 
 | Thành phần | Local mặc định | Preset `--kaggle` (T4) |
 |---|---|---|
@@ -833,7 +859,7 @@ Sơ đồ chi tiết (phong cách paper, 3 nhánh + Cross-Attention):
 | `pool_ratio` | 0.5 | 0.5 |
 | `seq_dim` / `ppi_in_dim` | 640 (ESM-2 150M) | auto từ data |
 | `ppi_out_dim` | 128 | 128 |
-| Fusion PPI | Cross-attention (4 heads) | Cross-attention |
+| Fusion PPI | Cross-attention 1 chiều (4 heads), đổi được sang 2 chiều qua `--fusion` | như local |
 | Tối ưu train | `--cache_ppi` | `--amp` + `--cache_ppi` |
 | Chống leak PPI | PPI leakage guard (mặc định bật, [mục 4.5](#45-chống-rò-rỉ-dữ-liệu-qua-ppi-ppi-leakage-guard)) | như local |
 

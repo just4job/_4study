@@ -324,9 +324,13 @@ def main():
     parser.add_argument(
         "--fusion",
         dest="fusion_mode",
-        choices=["attention", "concat"],
+        choices=["attention", "bi_attention", "concat"],
         default="attention",
-        help="Cách gộp struct/seq/ppi: attention (cross-attn) hoặc concat",
+        help=(
+            "Cách gộp struct/seq/ppi: attention (cross-attn 1 chiều: struct+seq "
+            "làm Query, PPI chỉ là Key/Value tĩnh) | bi_attention (cross-attn 2 "
+            "chiều: struct/seq/PPI cùng self-attend, PPI cũng được cập nhật) | concat"
+        ),
     )
     parser.add_argument(
         "--no-baseline-parity",
@@ -561,13 +565,14 @@ def main():
         fusion_mode=args.fusion_mode,
     ).to(device)
 
-    # Neighbor index cho cross-attention (fusion_mode="attention") phải khớp với đồ thị
-    # đang dùng ở từng thời điểm — model chỉ cache 1 index nội bộ (theo lệnh gọi đầu
+    # Neighbor index cho cross-attention (fusion_mode="attention" HOẶC "bi_attention"
+    # — cả 2 đều dùng PPIEncoder.gather_neighbor_batch) phải khớp với đồ thị đang
+    # dùng ở từng thời điểm — model chỉ cache 1 index nội bộ (theo lệnh gọi đầu
     # tiên), nên khi train dùng train_ppi_graph còn valid/test dùng ppi_graph gốc, ta
     # tự dựng & truyền tay 2 bảng riêng để tránh dùng nhầm index của đồ thị kia.
     train_ppi_neighbor_index = None
     full_ppi_neighbor_index = None
-    if args.use_ppi and args.fusion_mode == "attention":
+    if args.use_ppi and args.fusion_mode in ("attention", "bi_attention"):
         train_ppi_neighbor_index = PPIEncoder.build_neighbor_index(
             train_ppi_graph, model.ppi_max_neighbors
         )

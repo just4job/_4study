@@ -221,31 +221,43 @@ Eval (99 ngưỡng trên test — giống baseline paper):
 | hid | 512 | 256 | 256 |
 | Validate train | mỗi 4 ep, 99 ngưỡng | cuối | **mỗi 3 ep**, 5 ngưỡng |
 
-### Ablation fusion — 3 nhánh × 2 hướng (epoch/lr theo profile)
+### Ablation fusion — 3 nhánh × 4 hướng (epoch/lr theo profile)
 
 Script: [`scripts/run_fusion_ablation.py`](scripts/run_fusion_ablation.py)
 
-| Hướng | PPI | Fusion |
-|-------|:---:|:------:|
-| `ppi_concat` | Có | concat |
-| `no_ppi_attn` | Không | attention |
+| Hướng | PPI | Fusion | Ghi chú |
+|-------|:---:|:------:|---------|
+| `ppi_concat` | Có | concat | nối vector, không attention |
+| `no_ppi_attn` | Không | attention | attention chỉ giữa struct/seq |
+| `ppi_attn` | Có | attention | **1 chiều** — struct+seq làm Query, PPI chỉ là Key/Value tĩnh (không được cập nhật) |
+| `ppi_bi_attn` | Có | bi_attention | **2 chiều** — struct/seq/PPI gộp 1 chuỗi token, self-attention đối xứng, PPI cũng được struct/seq cập nhật ngược lại |
 
-**Profiles** (cùng epoch/lr cho 2 hướng trên mỗi nhánh — so sánh công bằng):
+Chạy đủ cả 4 hướng để so sánh; hoặc chỉ chạy 1 tập con qua `--configs`, ví dụ chỉ
+so 1 chiều với 2 chiều (giữ PPI cả 2 bên): `--configs ppi_attn ppi_bi_attn`.
 
-| Profile | MF (ep/lr) | CC (ep/lr) | BP (ep/lr) | ~Tổng 6 run |
+**Profiles** (cùng epoch/lr cho mọi hướng trên mỗi nhánh — so sánh công bằng):
+
+| Profile | MF (ep/lr) | CC (ep/lr) | BP (ep/lr) | ~Tổng (4 hướng × 3 nhánh = 12 run) |
 |---------|------------|------------|------------|-------------|
-| `fast` | 8 / 1e-4 | 8 / 1e-4 | 6 / 1e-4 | ~2–3 h |
-| `balanced` | 10 / 1e-4 | 10 / 1e-4 | 8 / 1e-4 | ~3–4 h |
-| `quality` | 15 / 1e-4 | 12 / 1e-4 | 12 / 1e-4 | ~5–7 h |
+| `fast` | 8 / 1e-4 | 8 / 1e-4 | 6 / 1e-4 | ~4–6 h |
+| `balanced` | 10 / 1e-4 | 10 / 1e-4 | 8 / 1e-4 | ~6–8 h |
+| `quality` | 15 / 1e-4 | 12 / 1e-4 | 12 / 1e-4 | ~10–14 h |
+
+> Ước lượng thời gian tăng gấp đôi so với bảng cũ (2→4 hướng). Nếu không đủ
+> thời gian Kaggle (session T4 giới hạn), ưu tiên `--configs ppi_attn ppi_bi_attn`
+> để chỉ so sánh trực tiếp 1 chiều vs 2 chiều (2 hướng, đúng bằng thời gian cũ).
 
 ```python
 %env DATA_DIR=/kaggle/working/CAFA6
 %env DGL_CUDA=1
 
-# Mặc định: balanced (~3–4 h)
+# Mặc định: cả 4 hướng, balanced (~6–8 h)
 !python /kaggle/working/CAFA6/scripts/run_fusion_ablation.py --profile balanced
 
-# Nhanh thử (~2 h)
+# Chỉ so 1 chiều vs 2 chiều (nhanh hơn, ~3–4 h — bằng thời gian bảng cũ)
+!python /kaggle/working/CAFA6/scripts/run_fusion_ablation.py --profile balanced --configs ppi_attn ppi_bi_attn
+
+# Nhanh thử (~2–3 h / hướng đã chọn)
 !python /kaggle/working/CAFA6/scripts/run_fusion_ablation.py --profile fast
 
 # Chất lượng cao hơn
@@ -258,7 +270,7 @@ Script: [`scripts/run_fusion_ablation.py`](scripts/run_fusion_ablation.py)
 !python /kaggle/working/CAFA6/scripts/run_fusion_ablation.py --eval-only --profile balanced
 ```
 
-Checkpoint: `bestmodel_{branch}_{ppi_concat|no_ppi_attn}_{batch}_{lr}_{dropout}.pkl`  
+Checkpoint: `bestmodel_{branch}_{ppi_concat|no_ppi_attn|ppi_attn|ppi_bi_attn}_{batch}_{lr}_{dropout}.pkl`  
 Kết quả: `log/fusion_ablation_summary.json`, `log/test_{branch}_{config}.log`
 
 ### Train lại MF (baseline-parity, tránh dropout 0.3)

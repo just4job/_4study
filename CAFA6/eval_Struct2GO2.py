@@ -301,9 +301,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--fusion",
         dest="fusion_mode",
-        choices=["attention", "concat"],
+        choices=["attention", "bi_attention", "concat"],
         default="attention",
-        help="Fusion struct/seq/ppi: attention hoặc concat (mặc định lấy từ checkpoint)",
+        help="Fusion struct/seq/ppi: attention (1 chiều) | bi_attention (2 chiều) | concat (mặc định lấy từ checkpoint)",
     )
     parser.add_argument(
         "--no-baseline-parity",
@@ -362,8 +362,8 @@ if __name__ == "__main__":
     model_has_ppi = patch_legacy_checkpoint(model)
     if not _argv_has("--fusion"):
         args.fusion_mode = getattr(model, "fusion_mode", args.fusion_mode)
-    if args.fusion_mode == "attention" and getattr(model, "fusion_attn", None) is None:
-        print("[WARN] fusion_mode=attention but checkpoint has no fusion_attn; using concat")
+    if args.fusion_mode in ("attention", "bi_attention") and getattr(model, "fusion_attn", None) is None:
+        print(f"[WARN] fusion_mode={args.fusion_mode} but checkpoint has no fusion_attn; using concat")
         args.fusion_mode = "concat"
     use_ppi = model_has_ppi and args.use_ppi
     if args.use_ppi and not model_has_ppi:

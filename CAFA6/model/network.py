@@ -9,8 +9,21 @@ from model.layer import (
     SAGPool,
     BimodalCrossAttention,
     MultiModalCrossAttention,
+    BidirectionalCrossAttention,
     ConcatFusion,
 )
+
+# fusion_mode="attention"    → MultiModalCrossAttention: 1 CHIỀU (struct+seq Query cố
+#                              định, PPI chỉ là Key/Value tĩnh, không được cập nhật).
+# fusion_mode="bi_attention" → BidirectionalCrossAttention: 2 CHIỀU (struct/seq/PPI
+#                              gộp thành 1 chuỗi token, self-attention đối xứng —
+#                              PPI cũng được struct/seq cập nhật ngược lại).
+# Cùng chữ ký forward()/out_dim nên chọn class ở __init__, forward() dùng chung 1
+# nhánh code cho cả 2 (xem "fusion_mode in _ATTN_FUSION_MODES" bên dưới).
+_ATTN_FUSION_CLASSES = {
+    "attention": MultiModalCrossAttention,
+    "bi_attention": BidirectionalCrossAttention,
+}
 
 
 def patch_legacy_checkpoint(model: torch.nn.Module) -> bool:
@@ -155,8 +168,10 @@ class SAGNetworkHierarchical(torch.nn.Module):
                  use_label_hierarchy: bool = False, label_iters: int = 20):
         super(SAGNetworkHierarchical, self).__init__()
 
-        if fusion_mode not in {"attention", "concat"}:
-            raise ValueError(f"fusion_mode must be 'attention' or 'concat', got {fusion_mode!r}")
+        if fusion_mode not in {"attention", "bi_attention", "concat"}:
+            raise ValueError(
+                f"fusion_mode must be 'attention', 'bi_attention' or 'concat', got {fusion_mode!r}"
+            )
 
         self.dropout = dropout
         self.num_convpools = num_convs
@@ -185,9 +200,10 @@ class SAGNetworkHierarchical(torch.nn.Module):
         else:
             self.ppi_encoder = None
 
-        if fusion_mode == "attention":
+        if fusion_mode in _ATTN_FUSION_CLASSES:
             if use_ppi:
-                self.fusion_attn = MultiModalCrossAttention(
+                attn_cls = _ATTN_FUSION_CLASSES[fusion_mode]
+                self.fusion_attn = attn_cls(
                     struct_dim=hid_dim * 2,
                     seq_dim=seq_dim,
                     ppi_dim=ppi_out_dim,
@@ -196,6 +212,8 @@ class SAGNetworkHierarchical(torch.nn.Module):
                     dropout=dropout,
                 )
             else:
+                # Không có PPI thì "1 chiều" và "2 chiều" là cùng 1 bài toán
+                # (chỉ struct+seq) — dùng chung BimodalCrossAttention.
                 self.fusion_attn = BimodalCrossAttention(
                     struct_dim=hid_dim * 2,
                     seq_dim=seq_dim,
@@ -309,7 +327,7 @@ class SAGNetworkHierarchical(torch.nn.Module):
                 node_emb_full = self.ppi_encoder.encode_all_nodes(ppi_graph)
             ppi_emb = PPIEncoder.gather_batch(node_emb_full, ppi_node_ids)
 
-        if fusion_mode == "attention":
+        if fusion_mode in _ATTN_FUSION_CLASSES:
             if use_ppi:
                 nbr_index = self._get_neighbor_index(
                     ppi_graph, ppi_neighbor_index, node_emb_full.device
