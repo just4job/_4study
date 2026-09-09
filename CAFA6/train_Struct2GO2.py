@@ -216,6 +216,10 @@ def apply_kaggle_preset(args: argparse.Namespace) -> None:
     # Kaggle preset validates only at the end; keep user overrides for other knobs
     # but do not let validate_every reintroduce long pauses every few epochs.
     args.validate_every = args.epochs
+    # pos_weight cải thiện AUPR/recall trên label hiếm (long-tail GO term) — bật
+    # mặc định trừ khi user tự truyền --pos-weight/--no-pos-weight.
+    if not _argv_has("--pos-weight", "--no-pos-weight"):
+        args.pos_weight = True
 
 
 def apply_baseline_parity_preset(args: argparse.Namespace) -> None:
@@ -239,6 +243,10 @@ def apply_baseline_parity_preset(args: argparse.Namespace) -> None:
     args.amp = False
     global Thresholds
     Thresholds = [x / 100 for x in range(1, 100)]
+    # pos_weight cải thiện AUPR/recall trên label hiếm (long-tail GO term) — bật
+    # mặc định trừ khi user tự truyền --pos-weight/--no-pos-weight.
+    if not _argv_has("--pos-weight", "--no-pos-weight"):
+        args.pos_weight = True
 
 
 def _restore_cli_overrides(
@@ -360,7 +368,16 @@ def main():
     parser.add_argument(
         "--pos-weight",
         action="store_true",
-        help="BCE pos_weight từ train set (cải thiện AUPR — khuyến nghị cho concat / no-ppi)",
+        help=(
+            "BCE pos_weight từ train set (cải thiện AUPR/recall trên label hiếm). "
+            "Preset --kaggle / baseline-parity (mặc định) tự bật; dùng --no-pos-weight để tắt."
+        ),
+    )
+    parser.add_argument(
+        "--no-pos-weight",
+        dest="pos_weight",
+        action="store_false",
+        help="Tắt pos_weight kể cả khi preset --kaggle/baseline-parity tự bật.",
     )
     parser.add_argument(
         "--ckpt-metric",

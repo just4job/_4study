@@ -344,6 +344,12 @@ python data_processing/split_protein_ids.py --min-bp 100 --min-other 50 --force
 > (vocab không lọc, `num_labels` lớn hơn), phải chạy lại từ bước 2b → 6 → 7 → 8
 > (`--force`) rồi **train lại** — checkpoint cũ có `out_dim`/`num_labels` khác,
 > không load được vào model mới và số liệu F-max không so sánh 1:1 được.
+>
+> **Cảnh báo mất cân bằng do split:** script còn tự in `[WARN]` nếu có GO term
+> trong `label_vocab_{ns}.json` **không có positive nào** ở valid hoặc test —
+> hệ quả của random split thuần theo protein ID (không stratify theo nhãn).
+> Chỉ là cảnh báo (không tự đổi split); nếu thấy nhiều label bị vậy, cân nhắc
+> tăng `--min-bp`/`--min-other` (bớt label hiếm) hoặc đổi seed thử lại.
 
 ---
 
@@ -722,6 +728,7 @@ Xem hướng dẫn đầy đủ từng bước upload data → notebook tại [m
 | `--amp` | FP16 mixed precision (T4) | Tắt |
 | `--cache_ppi` | Encode PPI graph 1 lần/epoch | Bật |
 | `--no_ppi_leakage_guard` | Tắt PPI leakage guard (xem [mục 4.5](#45-chống-rò-rỉ-dữ-liệu-qua-ppi-ppi-leakage-guard)) | Guard **bật** mặc định |
+| `--pos-weight` / `--no-pos-weight` | BCE pos_weight từ train set — cải thiện AUPR/recall trên GO term hiếm | **Bật** trong preset `--kaggle`/baseline-parity (mặc định); tắt bằng `--no-pos-weight` |
 | `--cpu` | Bắt buộc CPU | Tắt |
 | `--kaggle` | Preset T4 (bảng trên) | Tắt |
 
@@ -936,17 +943,20 @@ python scripts/run_fusion_ablation.py --configs ppi_attn ppi_bi_attn
 ```
 Đây chính là bug đã sửa ở Bước 2b: trước đây 3_build_graph_dataset.py rebuild
 vocab KHÔNG lọc tần suất (mọi GO term, kể cả chỉ xuất hiện ở 1 protein, đều
-thành nhãn) — với MF từng thấy đúng 5136 label kiểu này (một số script trong
-scripts/ có hardcode "422 labels" để nhận diện dataset MF "final-data" đã được
-lọc thủ công trước đây — vd. repair_mf_train.py, kaggle_link_data.py,
-retrain_fusion_bc.py, diag_mf_train.py, pack_for_kaggle.py).
+thành nhãn) — với MF từng thấy đúng 5136 label kiểu này.
 
 Sau khi chạy split_protein_ids.py (Bước 2b), số label MF/BP/CC sẽ được TÍNH
 LẠI đúng theo --min-bp/--min-other (mặc định 250/100, đếm trên train) — số
-này CÓ THỂ khác 422 (tuỳ go.obo version, valid_protein_ids, ngưỡng min-count).
-Đây là kết quả ĐÚNG theo pipeline mới, không phải lỗi. Các cảnh báo "422
-labels"/"5136 labels" trong scripts/ ở trên vẫn còn hardcode số cũ — nếu dùng
-lại các script đó, kiểm tra tay số label thực tế thay vì tin theo cảnh báo.
+này CÓ THỂ khác 422 (số từ 1 lần build thủ công trước đây, tuỳ go.obo version,
+valid_protein_ids, ngưỡng min-count). Đây là kết quả ĐÚNG theo pipeline mới,
+không phải lỗi.
+
+Các script hỗ trợ MF trên Kaggle (repair_mf_train.py, kaggle_link_data.py,
+retrain_fusion_bc.py, diag_mf_train.py, pack_for_kaggle.py) giờ đọc
+proceed_data/label_vocab_mf.json để biết "label_dim đúng" thay vì hardcode
+422 — chỉ fallback về 422 khi CHƯA chạy split_protein_ids.py (chưa có file
+đó). Nếu vẫn thấy cảnh báo lệch label_dim sau khi đã chạy Bước 2b, kiểm tra
+lại label_vocab_mf.json có đúng phiên bản mới nhất không (--force nếu cần).
 ```
 
 **`FileNotFoundError: ppi_graph_global`**

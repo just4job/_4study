@@ -57,11 +57,12 @@ def main() -> int:
         if dim_train != dim_valid:
             print(
                 f"  [FAIL] train ({dim_train}) != valid ({dim_valid}) — "
-                "F-max sẽ ~0.002. Upload mf_train 422 labels.",
+                "F-max sẽ ~0.002. Upload mf_train có label_dim khớp mf_valid "
+                "(xem proceed_data/label_vocab_mf.json nếu đã chạy split_protein_ids.py).",
                 flush=True,
             )
             return 1
-        print("  label_dim OK (422 expected for CAFA6)", flush=True)
+        print(f"  label_dim OK (train == valid == {dim_train})", flush=True)
     except Exception as exc:
         print(f"  label check FAIL: {exc}", flush=True)
         return 1

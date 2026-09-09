@@ -121,3 +121,24 @@ def load_vocab(proc_dir: Path, branch: str) -> list[str] | None:
         return None
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def zero_positive_terms(protein_labels: dict, keys, vocab) -> list[str]:
+    """Trả về các GO term trong `vocab` KHÔNG có positive nào trong `keys`
+    (thường gọi với keys=valid_keys hoặc test_keys). Split random thuần theo
+    protein ID không stratify theo nhãn, nên với label vừa đủ ngưỡng min-count,
+    có xác suất không nhỏ để 1 label gần như vắng mặt ở valid/test — khi đó
+    precision/recall/F1 cho label đó ở split đó không ổn định hoặc vô nghĩa
+    (0 hoặc undefined). Hàm này chỉ để CẢNH BÁO, không tự đổi split.
+    """
+    vocab_set = set(vocab)
+    if not vocab_set:
+        return []
+    present: set[str] = set()
+    for pid in keys:
+        for term in protein_labels.get(pid, []):
+            if term in vocab_set:
+                present.add(term)
+        if len(present) == len(vocab_set):
+            break
+    return sorted(vocab_set - present)

@@ -40,6 +40,12 @@ dữ liệu như 2_build_go_namespace.py) — tránh để thống kê tần su�
 rò rỉ vào việc quyết định "GO term nào được coi là nhãn hợp lệ".
 3_build_graph_dataset.py giờ đọc thẳng label_vocab_{ns}.json này làm vocab
 chính thức thay vì tự rebuild.
+
+Cảnh báo mất cân bằng do split (chỉ in log, không ghi file, không đổi split):
+sau khi chia, script đếm số GO term trong label_vocab_{ns}.json KHÔNG có
+positive nào ở valid hoặc test — random split thuần theo protein ID (không
+stratify theo nhãn) có thể khiến 1 số label vừa đủ ngưỡng min-count gần như
+vắng mặt ở 1 split, làm F1/AUPR cho label đó ở split đó không ổn định/vô nghĩa.
 """
 
 import argparse
@@ -52,7 +58,13 @@ if __name__ == "__main__" and __package__ in (None, ""):
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from data_processing.split_utils import compute_label_vocab, save_split, save_vocab, split_protein_ids
+from data_processing.split_utils import (
+    compute_label_vocab,
+    save_split,
+    save_vocab,
+    split_protein_ids,
+    zero_positive_terms,
+)
 
 
 def _resolve_data_dir() -> Path:
@@ -134,6 +146,20 @@ def main() -> None:
             f"(min_count={min_count}, chỉ đếm trên {len(train_keys):,} protein train; "
             f"trước khi lọc: {all_terms_unfiltered:,} term) -> {vocab_out}"
         )
+
+        # Cảnh báo (không đổi split): random split thuần theo protein ID không
+        # stratify theo nhãn — 1 số label vừa đủ ngưỡng min-count có thể gần như
+        # vắng mặt ở valid/test, khiến F1/AUPR cho label đó ở split đó không ổn
+        # định hoặc vô nghĩa. Xem README mục 3 (Bước 2b) / mục đề xuất cải tiến.
+        zero_valid = zero_positive_terms(protein_labels, valid_keys, vocab)
+        zero_test = zero_positive_terms(protein_labels, test_keys, vocab)
+        if zero_valid or zero_test:
+            examples = (zero_valid or zero_test)[:5]
+            print(
+                f"  [WARN] {ns}: {len(zero_valid)}/{len(vocab)} label không có positive "
+                f"nào ở valid, {len(zero_test)}/{len(vocab)} label ở test (random split "
+                f"không stratify theo nhãn). Ví dụ: {examples}"
+            )
 
 
 if __name__ == "__main__":

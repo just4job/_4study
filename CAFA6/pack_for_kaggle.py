@@ -25,6 +25,7 @@ Sau khi tạo xong:
   2. Upload kaggle_data.zip
   3. Đặt tên dataset, ví dụ "cafa6-data"
 """
+import json
 import os
 import sys
 import zipfile
@@ -115,7 +116,9 @@ def main():
         print("ERROR: Không tìm thấy file dataset nào. Đã chạy data_processing/divide_data.py chưa?")
         sys.exit(1)
 
-    # Verify MF label count before upload
+    # Verify MF label count before upload — so với label_vocab_mf.json (Bước 2b,
+    # đã lọc min-count đúng) thay vì hardcode 422 (số cũ từ 1 lần build thủ công
+    # trước khi có bộ lọc đúng trong pipeline, xem README mục 3 — Bước 2b).
     if "mf" in branches and (DIVIDED_DIR / "mf_train_dataset").exists():
         try:
             import pickle
@@ -127,8 +130,23 @@ def main():
                 ds = pickle.load(f)
             dim = int(np.asarray(ds[0][2]).reshape(-1).shape[0])
             print(f"mf_train: n={len(ds)} labels={dim}")
-            if dim != 422:
-                print(f"[WARN] MF ablation CAFA6 cần labels=422 (valid final-data). Hiện tại: {dim}")
+
+            vocab_path = PROC_DIR / "label_vocab_mf.json"
+            expected_dim = None
+            expected_source = None
+            if vocab_path.exists():
+                with open(vocab_path, "r", encoding="utf-8") as f:
+                    expected_dim = len(json.load(f))
+                expected_source = "label_vocab_mf.json"
+            else:
+                expected_dim = 422
+                expected_source = "số cũ 'final-data' (fallback — chưa chạy split_protein_ids.py)"
+
+            if dim != expected_dim:
+                print(
+                    f"[WARN] mf_train labels={dim} khác {expected_source} "
+                    f"(labels={expected_dim}). Kiểm tra lại trước khi upload."
+                )
         except Exception as exc:
             print(f"[WARN] Không verify mf_train: {exc}")
 
