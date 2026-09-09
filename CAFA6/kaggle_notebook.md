@@ -17,8 +17,13 @@ python data_processing/split_protein_ids.py --force        # Bước 2b (mới)
 python data_processing/4_build_ppi_graph.py                # -> ppi_graph_train_{ns}
 python data_processing/3_build_graph_dataset.py            # -> label_vocab/label_network chỉ từ train
 python data_processing/divide_data.py --force              # đọc lại split_{ns}.json
+python scripts/audit_data.py --deep                        # KIỂM TRA trước khi pack
 python pack_for_kaggle.py                                  # -> kaggle_data.zip
 ```
+
+> Chạy `audit_data.py` **ở local trước khi pack** — phát hiện lỗi ở đây rẻ hơn
+> nhiều so với sau khi đã upload vài GB lên Kaggle. Cell 5 sẽ chạy lại nó trên
+> Kaggle để chắc chắn dữ liệu không hỏng trong lúc upload/giải nén.
 
 Upload `kaggle_data.zip` lên [Kaggle Datasets](https://www.kaggle.com/datasets) →
 **New Dataset** (vd. tên `cafa6-data`) → gắn vào notebook.
@@ -96,50 +101,39 @@ Chỉ dùng 1 nhánh cho nhanh (bỏ validate pickle nặng của nhánh khác):
 
 ---
 
-## Cell 5 — Khoá `DATA_DIR` + kiểm tra dataset có đủ file mới
+## Cell 5 — Khoá `DATA_DIR` + audit dữ liệu
 
-Chạy trước train/eval để tránh notebook cũ quay về `D:/CAFA6`, đồng thời xác nhận
-dataset là bản **đã đóng gói lại** (có `split_*`, `label_vocab_*`, `ppi_graph_train_*`).
+Chạy trước train/eval: khoá `DATA_DIR` (tránh notebook cũ quay về `D:/CAFA6`) rồi
+audit toàn bộ dữ liệu đã chuẩn bị.
 
 ```python
-import json
-import os
-from pathlib import Path
-
-os.environ["DATA_DIR"] = "/kaggle/working/CAFA6"
-root = Path(os.environ["DATA_DIR"])
-print("DATA_DIR =", root)
-
-BRANCHES = ["mf", "cc", "bp"]
-ok = True
-
-for br in BRANCHES:
-    row = []
-    for split in ("train", "valid", "test"):
-        p = root / "divided_data" / f"{br}_{split}_dataset"
-        row.append(f"{split}={'OK' if p.is_file() else 'MISSING'}")
-    print(f"[{br}] divided_data: " + "  ".join(row))
-
-print()
-for br in BRANCHES:
-    split_p = root / "proceed_data" / f"split_{br}.json"
-    vocab_p = root / "proceed_data" / f"label_vocab_{br}.json"
-    ppi_tr = root / "proceed_data" / f"ppi_graph_train_{br}"
-    n_vocab = len(json.loads(vocab_p.read_text())) if vocab_p.is_file() else None
-    print(
-        f"[{br}] split_{br}.json={'OK' if split_p.is_file() else 'MISSING'}  "
-        f"label_vocab={n_vocab if n_vocab is not None else 'MISSING'} label  "
-        f"ppi_graph_train={'OK' if ppi_tr.is_file() else 'MISSING'}"
-    )
-    if not (split_p.is_file() and vocab_p.is_file() and ppi_tr.is_file()):
-        ok = False
-
-print("\nppi_graph_global:", (root / "proceed_data/ppi_graph_global").is_file())
-print(
-    "\n=> Dataset ĐÚNG bản mới" if ok else
-    "\n=> [WARN] Thiếu file của pipeline mới — sẽ chạy fallback (xem mục 0)"
-)
+%env DATA_DIR=/kaggle/working/CAFA6
+!python /kaggle/working/CAFA6/scripts/audit_data.py
 ```
+
+`scripts/audit_data.py` kiểm tra 6 nhóm (exit code 1 nếu có `FAIL`):
+
+| # | Kiểm tra | Bắt được lỗi gì |
+|---|---|---|
+| 1 | Đủ artifact pipeline mới (`split_*`, `label_vocab_*`, `ppi_graph_train_*`) | Dataset còn là bản cũ → sẽ chạy fallback |
+| 2 | Split rời nhau, phủ hết protein trong ACS | Trùng protein giữa train/valid/test |
+| 3 | Vocab đã lọc min-count trên train | Bug vocab không lọc (MF 5136 label), label không có positive ở train |
+| 4 | **`ppi_graph_train_{ns}` thực sự không còn cạnh chạm valid/test** | PPI leakage guard không hoạt động (build khi chưa có `split_*.json`) |
+| 5 | Chiều nhãn khớp giữa vocab / label_network / dataset | Trộn dữ liệu cũ và mới → F-max ~0.002 |
+| 6 | Label không có positive nào ở valid/test | Mất cân bằng do random split |
+
+> Kiểm tra #4 là quan trọng nhất và **chỉ chạy được ở nơi có torch/dgl** (Kaggle
+> sau Cell 2, hoặc máy local có env đầy đủ) — nó mở graph ra đếm thật, không chỉ
+> xem file có tồn tại.
+
+Đối chiếu sâu hơn (load cả `divided_data`, vài GB — chậm nhưng chắc chắn):
+
+```python
+!python /kaggle/working/CAFA6/scripts/audit_data.py --deep
+```
+
+Kiểm tra thêm: protein ID trong `{ns}_{train,valid,test}_dataset` có đúng nhóm
+theo `split_{ns}.json` không, 3 tập có rời nhau không.
 
 ---
 

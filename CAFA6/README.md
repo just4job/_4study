@@ -197,6 +197,7 @@ mkdir D:\CAFA6\test_result
 | 6 | `4_build_ppi_graph.py` | `ppi_graph_global`, `ppi_protein_index`, `ppi_graph_train_*` | 5–20 phút |
 | 7 | `3_build_graph_dataset.py` | `emb_graph_*`, `emb_seq_feature_*`, `label_*_network` (chỉ từ train), … | 30–90 phút |
 | 8 | `divide_data.py` | `divided_data/*_dataset` (đọc lại `split_{ns}.json`) | vài phút |
+| **audit** | **`scripts/audit_data.py`** | **kiểm tra data trước khi train/pack** ([mục 7](#7-xử-lý-sự-cố)) | **vài giây** |
 | — | `pack_for_kaggle.py` (nếu lên Kaggle) | `kaggle_data.zip` | vài phút |
 | Train | `train_Struct2GO2.py` | `save_models/bestmodel_*.pkl` | xem mục 4 / 8 |
 
@@ -990,6 +991,32 @@ python scripts/run_fusion_ablation.py --configs ppi_attn ppi_bi_attn
 | `train_Struct2GO2.py` | Path | Dùng env `DATA_DIR` (không sửa code) |
 | `eval_Struct2GO2.py` | Path | Dùng env `DATA_DIR` + `-model_path` |
 
+### Kiểm tra data trước khi train (chạy đầu tiên khi nghi ngờ có vấn đề)
+
+```bash
+python scripts/audit_data.py              # nhẹ, vài giây
+python scripts/audit_data.py --deep       # + load divided_data (vài GB, chậm hơn)
+python scripts/audit_data.py --branch mf  # 1 nhánh
+DATA_DIR=/kaggle/working/CAFA6 python scripts/audit_data.py   # trên Kaggle
+```
+
+Script audit 6 nhóm, exit code 1 nếu có `FAIL`:
+
+| # | Kiểm tra | Bắt được lỗi gì |
+|---|---|---|
+| 1 | Đủ artifact pipeline mới (`split_*`, `label_vocab_*`, `ppi_graph_train_*`) | Data còn là bản cũ → train sẽ chạy đường fallback |
+| 2 | Split rời nhau + phủ hết protein trong ACS | Trùng protein giữa train/valid/test |
+| 3 | Vocab đã lọc min-count **trên train** | Bug vocab không lọc (MF 5136 label); label không có positive ở train |
+| 4 | **`ppi_graph_train_{ns}` thực sự không còn cạnh chạm valid/test** | PPI leakage guard không hoạt động (build khi chưa có `split_{ns}.json`) |
+| 5 | Chiều nhãn khớp giữa vocab / `label_{ns}_network` / dataset | Trộn data cũ + mới → F-max ~0.002 |
+| 6 | Label không có positive nào ở valid/test | Mất cân bằng do random split (xem [Bước 2b](#bước-2b--chia-trainvalidtest-theo-protein-id-sớm--chống-leak)) |
+
+> Kiểm tra #4 và #5 cần **torch/dgl** (mở graph/pickle ra đếm thật). Ở môi trường
+> thiếu 2 gói này, script tự `SKIP` các mục đó thay vì báo lỗi sai.
+>
+> **Luôn chạy audit trước `pack_for_kaggle.py`** — phát hiện lỗi ở local rẻ hơn
+> nhiều so với phát hiện sau khi đã upload vài GB lên Kaggle.
+
 ### Lỗi thường gặp
 
 **MF có 5136 label thay vì ~400 (hoặc số label MF/BP/CC tự nhiên "nhảy" sau khi sửa vocab)**
@@ -1092,6 +1119,7 @@ python data_processing/3_uniprot_mapping.py
 python data_processing/4_build_ppi_graph.py           # đọc split_{ns}.json -> ppi_graph_train_*
 python data_processing/3_build_graph_dataset.py       # đọc split_{ns}.json -> label_*_network + label_vocab_* chỉ từ train
 python data_processing/divide_data.py                 # đọc lại split_{ns}.json
+python scripts/audit_data.py --deep                   # KIỂM TRA data trước khi train (mục 7)
 python train_Struct2GO2.py -branch mf -dropout 0.2
 python train_Struct2GO2.py -branch cc -dropout 0.2
 python train_Struct2GO2.py -branch bp  -dropout 0.1
@@ -1138,6 +1166,7 @@ python data_processing/split_protein_ids.py --force
 python data_processing/4_build_ppi_graph.py
 python data_processing/3_build_graph_dataset.py
 python data_processing/divide_data.py --force
+python scripts/audit_data.py --deep      # kiểm tra trước khi pack (mục 7)
 python pack_for_kaggle.py
 ```
 
