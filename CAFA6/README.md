@@ -1106,106 +1106,73 @@ python eval_Struct2GO2.py -branch bp
 
 ## 8. Huấn luyện trên Kaggle T4 (chi tiết)
 
+> **Hướng dẫn chạy đầy đủ từng cell: [`kaggle_notebook.md`](kaggle_notebook.md)** —
+> đó là tài liệu chính (luôn cập nhật theo code hiện tại). Mục 8 này chỉ tóm tắt
+> workflow + số liệu tham chiếu.
+
 ### 8.1 Tổng quan workflow
 
 ```
-[Máy local]  Bước 1–8 (data_processing)  →  proceed_data/ + divided_data/
-      │
+[Máy local]  Bước 1 → 2 → 2b → 3 … → 8 (data_processing)  →  proceed_data/ + divided_data/
+      │        (2b = split_protein_ids.py — BẮT BUỘC trước bước 6/7, xem mục 3)
       ▼
 [Máy local]  python pack_for_kaggle.py     →  kaggle_data.zip
       │
       ▼
-[Kaggle]     Upload dataset + Notebook GPU T4
+[Kaggle]     Upload dataset + Notebook GPU T4 (kaggle_notebook.md — Cell 1→5)
       │
       ▼
-[Kaggle]     train_Struct2GO2.py --kaggle  →  save_models/ + log/
+[Kaggle]     scripts/kaggle_run_branches.py  →  save_models/ + log/ + cafa6_output.zip
 ```
 
 > **Khuyến nghị:** Xử lý data nặng (PDB, ESM, PPI) trên máy local; chỉ upload artifact đã build lên Kaggle để train.
 
 ### 8.2 Bước A — Đóng gói dữ liệu (local)
 
-Sau khi chạy xong `divide_data.py`:
+Chạy lại từ Bước 2b nếu `proceed_data` được build trước khi có các fix về
+vocab/PPI leakage guard (xem [mục 3, Bước 2b](#bước-2b--chia-trainvalidtest-theo-protein-id-sớm--chống-leak)):
 
 ```bash
 cd D:\CAFA6
+python data_processing/split_protein_ids.py --force
+python data_processing/4_build_ppi_graph.py
+python data_processing/3_build_graph_dataset.py
+python data_processing/divide_data.py --force
 python pack_for_kaggle.py
 ```
 
-Tạo file `kaggle_data.zip` chứa:
-- `divided_data/{mf,bp,cc}_{train,valid}_dataset`
-- `proceed_data/label_{mf,bp,cc}_network`
-- `proceed_data/ppi_graph_global`
-- `proceed_data/ppi_protein_index`
+`kaggle_data.zip` chứa (mỗi nhánh `{mf,cc,bp}`):
+- `divided_data/{ns}_{train,valid,test}_dataset`
+- `proceed_data/ppi_graph_global`, `ppi_protein_index`
+- `proceed_data/ppi_graph_train_{ns}` — đã ẩn cạnh valid/test ([mục 4.5](#45-chống-rò-rỉ-dữ-liệu-qua-ppi-ppi-leakage-guard))
+- `proceed_data/split_{ns}.json`, `label_vocab_{ns}.json` — split + vocab lọc từ train ([Bước 2b](#bước-2b--chia-trainvalidtest-theo-protein-id-sớm--chống-leak))
+- `proceed_data/label_{ns}_network`, `human_{NS}_ACS.json`
 
 Upload lên [Kaggle Datasets](https://www.kaggle.com/datasets) → **New Dataset** → đặt tên ví dụ `cafa6-data`.
+
+> **Checkpoint train trước các fix này không dùng lại được** (`num_labels` đã đổi
+> sau khi vocab được lọc đúng) — cần train lại từ đầu.
 
 ### 8.3 Bước B — Tạo Notebook Kaggle
 
 1. **New Notebook** → Settings → **Accelerator: GPU T4 x1**
 2. **Add Data** → chọn dataset `cafa6-data`
 3. **Internet: ON** (clone repo + pip)
-4. Copy từng cell từ `kaggle_notebook.md` (hoặc dùng snippet dưới)
+4. Copy từng cell theo **[`kaggle_notebook.md`](kaggle_notebook.md)** — gồm:
 
-**Cell 1 — Cài dependency + kiểm tra GPU**
-```python
-# Kaggle: cần torchdata + DGL CUDA 12 (KHÔNG dùng cu118):
-!pip install -q torchdata
-!pip uninstall -y dgl
-!pip install -q dgl -f https://data.dgl.ai/wheels/torch-2.5/cu124/repo.html
-# hoặc: !python scripts/install_dgl_kaggle.py
-!pip install -q packaging fair-esm transformers biopython tqdm
+| Cell | Việc | Script dùng |
+|---|---|---|
+| 0 | Điều kiện tiên quyết + checklist file trong dataset | (mục 8.2 ở trên) |
+| 1–3 | Clone repo, cài thư viện + DGL CUDA, kiểm tra GPU | `scripts/kaggle_fix_dgl.py` |
+| 4 | Nối dữ liệu từ `/kaggle/input` | `scripts/kaggle_link_data.py` |
+| 5 | Khoá `DATA_DIR` + kiểm tra dataset có đủ file pipeline mới | (snippet trong notebook) |
+| 6 | Train + eval 3 nhánh, tự zip sau mỗi nhánh | `scripts/kaggle_run_branches.py` |
+| 7 | Đọc 4 dòng log quan trọng (leak guard, loss, macro/bucket, thresh-select) | — |
+| 8 | Ablation fusion (4 hướng) + loss (`bce`/`bce_pos_weight`/`focal`) | `scripts/run_fusion_ablation.py` |
+| 9 | Gom kết quả + tải zip về máy | `scripts/kaggle_save_results.py` |
 
-import torch, dgl
-print("PyTorch", torch.__version__, "CUDA", torch.cuda.is_available())
-g = dgl.graph(([0, 1], [1, 2])).to("cuda")
-print("DGL device:", g.device)
-```
-
-> Nếu lỗi wheel CUDA: thử `cu121` hoặc `cu117` trong URL wheel DGL.
-
-**Cell 2 — Clone repo**
-```python
-%cd /kaggle/working
-!git clone https://github.com/PNTLinh/CAFA6.git
-%cd CAFA6
-```
-
-**Cell 3 — Liên kết dataset**
-```python
-from pathlib import Path
-input_dir = next(Path("/kaggle/input").iterdir())
-print("Dataset:", input_dir)
-!ln -sf {input_dir}/divided_data /kaggle/working/CAFA6/divided_data
-!ln -sf {input_dir}/proceed_data /kaggle/working/CAFA6/proceed_data
-!ls /kaggle/working/CAFA6/proceed_data/ppi_graph_global
-```
-
-**Cell 4 — Train (preset T4)**
-```python
-import os
-os.environ["DGL_CUDA"] = "1"
-os.environ["DATA_DIR"] = "/kaggle/working/CAFA6"
-
-!cd /kaggle/working/CAFA6 && python train_Struct2GO2.py -branch mf --kaggle
-```
-
-**Cell 5 — Train nhánh khác (tùy chọn)**
-```python
-!cd /kaggle/working/CAFA6 && DGL_CUDA=1 DATA_DIR=/kaggle/working/CAFA6 \
-    python train_Struct2GO2.py -branch bp --kaggle -dropout 0.1
-
-!cd /kaggle/working/CAFA6 && DGL_CUDA=1 DATA_DIR=/kaggle/working/CAFA6 \
-    python train_Struct2GO2.py -branch cc --kaggle
-```
-
-**Cell 6 — Lưu output**
-```python
-!cp -r /kaggle/working/CAFA6/save_models /kaggle/working/
-!cp -r /kaggle/working/CAFA6/log /kaggle/working/
-```
-
-Commit notebook (**Save & Run All**) → tab **Output** để tải `bestmodel_*.pkl`.
+> Tài liệu cũ trong mục này (symlink `ln -sf` thủ công, cài DGL bằng wheel URL,
+> train từng lệnh rời) đã bỏ — dùng các script `scripts/kaggle_*.py` như bảng trên.
 
 ### 8.4 Ước lượng thời gian & VRAM (T4 16GB)
 
@@ -1227,3 +1194,6 @@ Nếu OOM: `-batch_size 64` hoặc bỏ `--kaggle` và dùng `-hid_dim 256 -num_
 | `AdamW` + cosine schedule | Ổn định hơn Adam thuần |
 | `cudnn.benchmark` | Tự chọn kernel conv nhanh nhất |
 | Auto `labels_num` / `seq_dim` | Tránh lệch giữa CLI và data thực tế |
+| PPI leakage guard build-time | Dùng `ppi_graph_train_{ns}` build sẵn ở local → không phải mask lúc runtime, **không cần load `test_dataset`** trên Kaggle ([mục 4.5](#45-chống-rò-rỉ-dữ-liệu-qua-ppi-ppi-leakage-guard)) |
+| `pos_weight` per-label | Bật mặc định trong preset — bù đúng mức cho GO term hiếm ([mục 4.6](#46-loss-ablation-bce--bce_pos_weight--focal)) |
+| Threshold từ valid | Eval không quét ngưỡng trên test nữa ([mục 5](#5-đánh-giá)) |
