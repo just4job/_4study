@@ -25,7 +25,7 @@ from transformers import get_cosine_schedule_with_warmup
 
 from data_processing.divide_data import MyDataSet
 from model.evaluation import cacul_aupr, calculate_performance, roc_auc_flat
-from model.network import SAGNetworkHierarchical
+from model.network import PPIEncoder, SAGNetworkHierarchical
 
 warnings.filterwarnings("ignore")
 
@@ -90,6 +90,46 @@ def _load_pickle(path: str):
             f"Dataset pickle is truncated or corrupted: {file_path}. Rebuild divided_data or re-run kaggle_link_data.py."
         ) from exc
 Thresholds = [x / 100 for x in range(1, 100)]
+
+
+def _collect_ppi_node_ids(dataset: MyDataSet) -> set[int]:
+    """Tập ppi_node_id (>=0) của các protein trong 1 dataset split."""
+    return {nid for nid in dataset.ppi_node_id.values() if nid is not None and nid >= 0}
+
+
+def build_train_only_ppi_graph(
+    ppi_graph: "dgl.DGLGraph", hidden_node_ids: set[int]
+) -> "dgl.DGLGraph":
+    """Ẩn (mask) mọi cạnh PPI có ít nhất 1 đầu là node valid/test — chống leak khi train.
+
+    ppi_graph_global là 1 đồ thị PPI TOÀN CỤC dựng từ toàn bộ protein (không phân biệt
+    train/valid/test). PPIEncoder (GraphSAGE) mặc định encode nguyên đồ thị này mỗi
+    epoch, nên embedding của 1 protein "train" có thể nhận message lan truyền từ
+    hàng xóm PPI đang thuộc tập valid/test — rò rỉ gián tiếp thông tin (sequence
+    feature) của valid/test vào lúc train (xem README mục "PPI leakage guard").
+
+    Hàm này trả về 1 bản sao ppi_graph nhưng CẮT mọi cạnh chạm tới `hidden_node_ids`
+    (thường là ppi_node_id của protein thuộc valid+test). Số node và node feature
+    giữ nguyên (node valid/test vẫn tồn tại nhưng bị cô lập, không có cạnh) — vì vậy
+    ppi_node_id lookup không đổi và graph vẫn tương thích với phần còn lại của code.
+    Dùng graph này CHỈ khi train; lúc validate/test luôn dùng ppi_graph_global gốc
+    (đầy đủ cạnh) để đánh giá đúng khả năng model dùng PPI thật.
+    """
+    if not hidden_node_ids:
+        return ppi_graph
+
+    num_nodes = ppi_graph.num_nodes()
+    device = ppi_graph.device
+    hidden_idx = torch.as_tensor(sorted(hidden_node_ids), dtype=torch.long, device=device)
+    hidden_idx = hidden_idx[hidden_idx < num_nodes]
+    hidden_mask = torch.zeros(num_nodes, dtype=torch.bool, device=device)
+    hidden_mask[hidden_idx] = True
+
+    src, dst = ppi_graph.edges()
+    keep_eids = (~(hidden_mask[src] | hidden_mask[dst])).nonzero(as_tuple=True)[0]
+    masked_graph = dgl.edge_subgraph(ppi_graph, keep_eids, relabel_nodes=False)
+    masked_graph.ndata["feat"] = ppi_graph.ndata["feat"]
+    return masked_graph
 
 
 def _resolve_data_dir() -> str:
@@ -301,6 +341,17 @@ def main():
     parser.add_argument("--no_cache_ppi", dest="cache_ppi", action="store_false",
                         help="Tắt cache PPI embedding mỗi epoch")
     parser.set_defaults(cache_ppi=True)
+    parser.add_argument(
+        "--no_ppi_leakage_guard",
+        dest="ppi_leakage_guard",
+        action="store_false",
+        help=(
+            "Tắt cơ chế ẩn cạnh PPI nối tới valid/test khi train (bán-inductive hoá PPI). "
+            "Mặc định BẬT để chống leak; chỉ tắt khi cố tình muốn tái tạo hành vi "
+            "transductive cũ (vd. để so sánh/ablation)."
+        ),
+    )
+    parser.set_defaults(ppi_leakage_guard=True)
     parser.add_argument("--cpu", action="store_true", help="Bắt buộc train trên CPU")
     parser.add_argument(
         "--pos-weight",
@@ -374,6 +425,7 @@ def main():
     data_dir = _resolve_data_dir()
     train_data_path = f"{data_dir}/divided_data/{args.branch}_train_dataset"
     valid_data_path = f"{data_dir}/divided_data/{args.branch}_valid_dataset"
+    test_data_path = f"{data_dir}/divided_data/{args.branch}_test_dataset"
     label_network_path = f"{data_dir}/proceed_data/label_{args.branch}_network"
     ppi_graph_path = f"{data_dir}/proceed_data/ppi_graph_global"
 
@@ -383,6 +435,7 @@ def main():
         f"device={device}, amp={args.amp}, cache_ppi={args.cache_ppi}, "
         f"kaggle={args.kaggle}, baseline_parity={args.baseline_parity}, "
         f"use_ppi={args.use_ppi}, fusion_mode={args.fusion_mode}, "
+        f"ppi_leakage_guard={args.ppi_leakage_guard}, "
         f"ckpt_metric={ckpt_metric}, pos_weight={args.pos_weight}"
     )
     logger.info(
@@ -403,6 +456,7 @@ def main():
     label_network = label_network.to(device)
 
     ppi_graph = None
+    train_ppi_graph = None
     ppi_feat_dim = args.seq_dim
     if args.use_ppi:
         print(f"Loading PPI graph: {ppi_graph_path} ...", flush=True)
@@ -410,6 +464,31 @@ def main():
         ppi_graph = ppi_graph.to(device)
         print("  PPI graph OK", flush=True)
         ppi_feat_dim = int(ppi_graph.ndata["feat"].shape[1])
+
+        train_ppi_graph = ppi_graph
+        if args.ppi_leakage_guard:
+            hidden_ids = _collect_ppi_node_ids(valid_dataset)
+            if Path(test_data_path).is_file():
+                test_dataset_for_mask = _load_pickle(test_data_path)
+                hidden_ids |= _collect_ppi_node_ids(test_dataset_for_mask)
+                del test_dataset_for_mask
+            else:
+                logger.warning(
+                    f"[ppi-leak-guard] Không tìm thấy {test_data_path} — chỉ ẩn được node "
+                    "valid, chưa chắc chắn ẩn hết node test. Chạy divide_data.py để có "
+                    "test_dataset đầy đủ."
+                )
+            train_ppi_graph = build_train_only_ppi_graph(ppi_graph, hidden_ids)
+            logger.info(
+                f"[ppi-leak-guard] train-only PPI subgraph: giữ {train_ppi_graph.num_edges():,}/"
+                f"{ppi_graph.num_edges():,} cạnh, ẩn {len(hidden_ids):,} node valid/test "
+                "(dùng --no_ppi_leakage_guard để tắt)"
+            )
+        else:
+            logger.warning(
+                "[ppi-leak-guard] TẮT (--no_ppi_leakage_guard) — PPIEncoder sẽ thấy toàn bộ "
+                "PPI graph (kể cả cạnh tới valid/test) trong lúc train. Chỉ dùng để so sánh/ablation."
+            )
 
     sample_label = train_dataset[0][2]
     detected_labels = int(np.asarray(sample_label).reshape(-1).shape[0])
@@ -463,6 +542,23 @@ def main():
         fusion_mode=args.fusion_mode,
     ).to(device)
 
+    # Neighbor index cho cross-attention (fusion_mode="attention") phải khớp với đồ thị
+    # đang dùng ở từng thời điểm — model chỉ cache 1 index nội bộ (theo lệnh gọi đầu
+    # tiên), nên khi train dùng train_ppi_graph còn valid/test dùng ppi_graph gốc, ta
+    # tự dựng & truyền tay 2 bảng riêng để tránh dùng nhầm index của đồ thị kia.
+    train_ppi_neighbor_index = None
+    full_ppi_neighbor_index = None
+    if args.use_ppi and args.fusion_mode == "attention":
+        train_ppi_neighbor_index = PPIEncoder.build_neighbor_index(
+            train_ppi_graph, model.ppi_max_neighbors
+        )
+        if train_ppi_graph is ppi_graph:
+            full_ppi_neighbor_index = train_ppi_neighbor_index
+        else:
+            full_ppi_neighbor_index = PPIEncoder.build_neighbor_index(
+                ppi_graph, model.ppi_max_neighbors
+            )
+
     total_steps = args.epochs * max(len(train_dataloader), 1)
     if args.baseline_parity:
         optimizer = optim.Adam(model.parameters(), lr=args.learningrate)
@@ -498,8 +594,9 @@ def main():
 
         ppi_node_emb = None
         if args.use_ppi and args.cache_ppi:
+            # train_ppi_graph = full graph khi guard tắt hoặc use_ppi=False không tới đây.
             with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_cuda and args.amp):
-                ppi_node_emb = model.encode_ppi_nodes(ppi_graph).detach()
+                ppi_node_emb = model.encode_ppi_nodes(train_ppi_graph).detach()
 
         train_loss = 0.0
         for i, (_, graphs, labels, seq_feats, ppi_node_ids) in enumerate(
@@ -516,9 +613,10 @@ def main():
                     graphs,
                     seq_feats,
                     label_network,
-                    ppi_graph=ppi_graph if args.use_ppi else None,
+                    ppi_graph=train_ppi_graph if args.use_ppi else None,
                     ppi_node_ids=ppi_node_ids if args.use_ppi else None,
                     ppi_node_emb=ppi_node_emb,
+                    ppi_neighbor_index=train_ppi_neighbor_index if args.use_ppi else None,
                 )
                 loss = criterion(logits, labels)
 
@@ -546,6 +644,7 @@ def main():
         pred, actual = [], []
 
         if args.use_ppi and args.cache_ppi:
+            # Validate LUÔN dùng ppi_graph gốc (đầy đủ cạnh) — khác train_ppi_graph ở trên.
             with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_cuda and args.amp):
                 ppi_node_emb = model.encode_ppi_nodes(ppi_graph).detach()
 
@@ -566,6 +665,7 @@ def main():
                         ppi_graph=ppi_graph if args.use_ppi else None,
                         ppi_node_ids=ppi_node_ids if args.use_ppi else None,
                         ppi_node_emb=ppi_node_emb,
+                        ppi_neighbor_index=full_ppi_neighbor_index if args.use_ppi else None,
                     )
                     loss = criterion(logits, labels)
                 probs = torch.sigmoid(logits)

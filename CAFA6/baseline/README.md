@@ -97,6 +97,12 @@ Trên CAFA6 / Kaggle thường dùng:
 | Validate every | 4 epoch | 3–6 epoch (preset: cuối cùng) |
 | Số ngưỡng F-max | 99 | 5 (preset Kaggle) |
 | `ppi_node_ids` trong batch | Không | Có |
+| PPI leakage guard | N/A (không có nhánh PPI) | Bật mặc định — xem [README chính, mục 4.5](../README.md#45-chống-rò-rỉ-dữ-liệu-qua-ppi-ppi-leakage-guard) |
+
+> **Lưu ý khi so sánh:** guard chỉ ảnh hưởng nhánh PPI (ẩn cạnh valid/test khi train),
+> không phụ thuộc `--baseline-parity`/`--kaggle`. Số F-max của CAFA6 sau khi thêm
+> guard có thể thấp hơn số cũ (trước khi có guard) vì đã loại bỏ phần rò rỉ
+> transductive — đây là so sánh công bằng hơn, không phải model kém đi.
 
 ---
 

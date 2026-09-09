@@ -18,6 +18,7 @@ Mô hình dự đoán chức năng protein (Gene Ontology) kết hợp **3 ngu�
 2. [Cài đặt môi trường](#2-cài-đặt-môi-trường)
 3. [Pipeline xử lý dữ liệu — chi tiết từng script](#3-pipeline-xử-lý-dữ-liệu--chi-tiết-từng-script)
 4. [Huấn luyện (local & Kaggle)](#4-huấn-luyện-local--kaggle)
+   - [4.5 Chống rò rỉ dữ liệu qua PPI (PPI leakage guard)](#45-chống-rò-rỉ-dữ-liệu-qua-ppi-ppi-leakage-guard)
 5. [Đánh giá](#5-đánh-giá)
 6. [Kiến trúc model](#6-kiến-trúc-model)
 7. [Xử lý sự cố](#7-xử-lý-sự-cố)
@@ -618,6 +619,7 @@ Xem hướng dẫn đầy đủ từng bước upload data → notebook tại [m
 | `-validate_every` | Validate mỗi N epoch | `4` |
 | `--amp` | FP16 mixed precision (T4) | Tắt |
 | `--cache_ppi` | Encode PPI graph 1 lần/epoch | Bật |
+| `--no_ppi_leakage_guard` | Tắt PPI leakage guard (xem [mục 4.5](#45-chống-rò-rỉ-dữ-liệu-qua-ppi-ppi-leakage-guard)) | Guard **bật** mặc định |
 | `--cpu` | Bắt buộc CPU | Tắt |
 | `--kaggle` | Preset T4 (bảng trên) | Tắt |
 
@@ -631,6 +633,59 @@ save_models/bestmodel_{branch}_{batch}_{lr}_{dropout}.pkl
 # Linux / Kaggle
 tail -f log/mf.log
 ```
+
+---
+
+### 4.5 Chống rò rỉ dữ liệu qua PPI (PPI leakage guard)
+
+**Vấn đề:** `ppi_graph_global` (bước 6) là 1 đồ thị PPI **toàn cục**, dựng từ *toàn bộ*
+protein (không phân biệt protein đó sau này rơi vào train/valid/test). `PPIEncoder`
+(GraphSAGE 2 lớp) mặc định encode **nguyên đồ thị này** mỗi epoch — kể cả lúc train.
+Vì vậy, embedding PPI của 1 protein "train" có thể nhận message truyền từ hàng xóm
+PPI đang thuộc tập **valid/test** → model gián tiếp học được đặc trưng (sequence
+feature) của protein valid/test ngay trong lúc train, dù nhãn (label) của chúng
+không hề bị lộ trực tiếp. Đây là kiểu rò rỉ transductive: F-max đo trên valid/test
+sẽ lạc quan hơn so với kịch bản thực tế (dự đoán cho 1 protein hoàn toàn mới, chưa
+biết PPI của nó).
+
+**Cách xử lý — bán-inductive hoá PPI:** `train_Struct2GO2.py` giờ tự động dựng thêm
+1 bản sao `ppi_graph_global` gọi là **`train_ppi_graph`**, trong đó mọi cạnh có
+**ít nhất 1 đầu là node valid hoặc test** (lấy từ `{branch}_valid_dataset` +
+`{branch}_test_dataset`) đều bị cắt. Node valid/test vẫn tồn tại trong graph (giữ
+nguyên feature) nhưng bị cô lập — không còn cạnh nào để GraphSAGE lan truyền message
+qua chúng.
+
+- **Lúc train** (encode PPI đầu epoch + forward mỗi batch): dùng `train_ppi_graph`
+  (chỉ còn cạnh train↔train).
+- **Lúc validate/test**: luôn dùng `ppi_graph_global` gốc (đầy đủ cạnh) — model được
+  đánh giá đúng với PPI thật mà nó sẽ thấy khi suy luận.
+- Cơ chế này áp dụng cho cả 2 đường: GraphSAGE embedding (`encode_all_nodes`) *và*
+  bảng hàng xóm dùng trong cross-attention (`fusion_mode=attention`, mặc định) — cả
+  hai đều được dựng riêng cho `train_ppi_graph` và `ppi_graph_global` để không lẫn
+  cạnh của nhau.
+
+**Mặc định: BẬT.** Không cần làm gì thêm — chạy `train_Struct2GO2.py` như bình
+thường sẽ tự áp dụng. Log sẽ in số cạnh giữ lại, ví dụ:
+
+```
+[ppi-leak-guard] train-only PPI subgraph: giữ 812,340/1,050,220 cạnh, ẩn 18,532 node valid/test
+```
+
+**Yêu cầu dữ liệu:** guard cần cả `{branch}_valid_dataset` **và**
+`{branch}_test_dataset` để biết node nào cần ẩn. Nếu thiếu `test_dataset` (vd. chạy
+`divide_data.py --only train` hoặc pack Kaggle với `--splits train valid`), guard
+vẫn chạy nhưng chỉ ẩn được node valid — log sẽ cảnh báo rõ và khuyến nghị chạy lại
+`divide_data.py` cho đủ 3 split trước khi train. `pack_for_kaggle.py` mặc định đã
+đóng gói cả `test` (`--splits train valid test`), nên workflow Kaggle chuẩn trong
+[mục 8](#8-huấn-luyện-trên-kaggle-t4-chi-tiết) không cần đổi gì.
+
+**Tắt guard (chỉ để so sánh/ablation với hành vi cũ):**
+```bash
+python train_Struct2GO2.py -branch mf --no_ppi_leakage_guard
+```
+Dùng flag này khi muốn tái tạo số liệu transductive cũ (trước khi có guard) để đối
+chiếu — **không khuyến nghị dùng cho kết quả báo cáo chính thức**, vì F-max sẽ bị
+thổi phồng do leak.
 
 ---
 
@@ -679,6 +734,7 @@ Sơ đồ chi tiết (phong cách paper, 3 nhánh + Cross-Attention):
 | `ppi_out_dim` | 128 | 128 |
 | Fusion PPI | Cross-attention (4 heads) | Cross-attention |
 | Tối ưu train | `--cache_ppi` | `--amp` + `--cache_ppi` |
+| Chống leak PPI | PPI leakage guard (mặc định bật, [mục 4.5](#45-chống-rò-rỉ-dữ-liệu-qua-ppi-ppi-leakage-guard)) | như local |
 
 ---
 
@@ -705,6 +761,14 @@ Chưa chạy bước 6: python data_processing/4_build_ppi_graph.py
 **`FileNotFoundError: uniprot_ensembl_mapping.csv`**
 ```
 Chưa chạy bước 5: python data_processing/3_uniprot_mapping.py
+```
+
+**`[ppi-leak-guard] Không tìm thấy .../{branch}_test_dataset ...`**
+```
+Guard vẫn chạy nhưng chỉ ẩn được node valid, không ẩn được node test (xem mục 4.5).
+Chạy: python data_processing/divide_data.py --namespace {branch}
+Hoặc nếu đang ở Kaggle: kiểm tra kaggle_data.zip có pack đủ split "test" chưa
+(pack_for_kaggle.py mặc định --splits train valid test — đừng bỏ "test").
 ```
 
 **Dimension mismatch trong model**
