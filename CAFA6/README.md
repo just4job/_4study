@@ -355,6 +355,48 @@ python data_processing/split_protein_ids.py --min-bp 100 --min-other 50 --force
 
 ---
 
+### Đang có DATA CŨ (build theo pipeline trên `main`, chưa có Bước 2b)?
+
+Data cũ **vẫn chạy được** với code mới (các đường fallback tự kích hoạt kèm
+`[WARN]`), nhưng còn 3 vấn đề. Có 2 cách xử lý:
+
+| | **A. Migrate nhanh** (`scripts/migrate_old_data.py`) | **B. Build lại** (Bước 2b → 6 → 7 → 8) |
+|---|---|---|
+| Thời gian | ~vài phút (chỉ load lại dataset 1 lượt) | ~1–2 giờ |
+| Cần gì | Chỉ cần bản pack cũ (kể cả trên Kaggle) | `proceed_data` đầy đủ ở **máy local** (`proteins_edges/`, `dict_sequence_feature`, …) |
+| `divided_data` | **Giữ nguyên** (không chia lại) | Build lại |
+| Sửa PPI leak (build-time `ppi_graph_train_*`) | ✅ | ✅ |
+| Sửa leak `label_{ns}_network` (chỉ từ train) | ✅ | ✅ |
+| Sửa vocab min-count (mất cân bằng, MF 5136 label) | ❌ *(chiều nhãn đã đóng băng trong `emb_label_*`)* | ✅ |
+| Checkpoint cũ | Vẫn load được (chiều nhãn không đổi) | Không dùng lại được |
+
+**Cách A — migrate nhanh:**
+
+```bash
+python scripts/migrate_old_data.py --dry-run   # xem trước, không ghi gì
+python scripts/migrate_old_data.py             # chạy thật
+python scripts/audit_data.py                   # kiểm tra lại
+
+# Trên Kaggle (proceed_data là symlink read-only -> cần --materialize):
+DATA_DIR=/kaggle/working/CAFA6 python scripts/migrate_old_data.py --materialize
+```
+
+Script suy ra `split_{ns}.json` **từ chính `divided_data` đang có** (giữ đúng
+phân vùng cũ, không chia lại), rồi dựng `ppi_graph_train_{ns}` và dựng lại
+`label_{ns}_network` chỉ từ protein train (bản cũ được backup `.bak`). Nhánh nào
+đã có `split_{ns}.json` thì bỏ qua.
+
+**Cách B — build lại** (khuyến nghị nếu muốn sửa cả mất cân bằng nhãn): chạy
+Bước 2b → 6 → 7 → 8 như [thứ tự chạy đầy đủ](#thứ-tự-chạy-đầy-đủ), rồi
+`pack_for_kaggle.py` và upload dataset mới. Phải **train lại từ đầu** vì
+`num_labels` đổi.
+
+> Dù chọn cách nào, chạy `python scripts/audit_data.py` sau đó để xác nhận
+> (đặc biệt kiểm tra #4: `ppi_graph_train_{ns}` thật sự không còn cạnh chạm
+> valid/test).
+
+---
+
 ### Bước 3 — Xây dựng contact map từ file PDB.gz
 
 **Script:** `data_processing/2_extract_struct_map.py`

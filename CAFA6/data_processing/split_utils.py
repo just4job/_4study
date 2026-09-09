@@ -123,6 +123,38 @@ def load_vocab(proc_dir: Path, branch: str) -> list[str] | None:
         return json.load(f)
 
 
+def build_train_only_ppi_graph(ppi_graph, hidden_node_ids):
+    """Cắt mọi cạnh PPI có ít nhất 1 đầu thuộc `hidden_node_ids` (node valid/test).
+
+    Giữ nguyên số node + node feature — chỉ các node bị ẩn mất hết cạnh, nên
+    ppi_node_id trong dataset vẫn trỏ đúng node. Dùng cho PPI leakage guard:
+    train thấy graph này, validate/test vẫn dùng ppi_graph_global đầy đủ
+    (xem README mục 4.5).
+
+    Hàm dùng chung cho: 4_build_ppi_graph.py (build-time), train_Struct2GO2.py
+    (fallback runtime) và scripts/migrate_old_data.py. torch/dgl được import
+    cục bộ để split_utils vẫn dùng được ở môi trường không có 2 gói này.
+    """
+    import dgl
+    import torch
+
+    if not hidden_node_ids:
+        return ppi_graph
+
+    num_nodes = ppi_graph.num_nodes()
+    device = ppi_graph.device
+    hidden_idx = torch.as_tensor(sorted(hidden_node_ids), dtype=torch.long, device=device)
+    hidden_idx = hidden_idx[hidden_idx < num_nodes]
+    hidden_mask = torch.zeros(num_nodes, dtype=torch.bool, device=device)
+    hidden_mask[hidden_idx] = True
+
+    src, dst = ppi_graph.edges()
+    keep_eids = (~(hidden_mask[src] | hidden_mask[dst])).nonzero(as_tuple=True)[0]
+    masked = dgl.edge_subgraph(ppi_graph, keep_eids, relabel_nodes=False)
+    masked.ndata["feat"] = ppi_graph.ndata["feat"]
+    return masked
+
+
 def zero_positive_terms(protein_labels: dict, keys, vocab) -> list[str]:
     """Trả về các GO term trong `vocab` KHÔNG có positive nào trong `keys`
     (thường gọi với keys=valid_keys hoặc test_keys). Split random thuần theo

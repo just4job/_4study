@@ -25,6 +25,7 @@ from tqdm import tqdm
 from transformers import get_cosine_schedule_with_warmup
 
 from data_processing.divide_data import MyDataSet
+from data_processing.split_utils import build_train_only_ppi_graph
 from model.evaluation import cacul_aupr, calculate_performance, macro_and_bucket_report, roc_auc_flat
 from model.network import PPIEncoder, SAGNetworkHierarchical
 
@@ -96,41 +97,6 @@ Thresholds = [x / 100 for x in range(1, 100)]
 def _collect_ppi_node_ids(dataset: MyDataSet) -> set[int]:
     """Tập ppi_node_id (>=0) của các protein trong 1 dataset split."""
     return {nid for nid in dataset.ppi_node_id.values() if nid is not None and nid >= 0}
-
-
-def build_train_only_ppi_graph(
-    ppi_graph: "dgl.DGLGraph", hidden_node_ids: set[int]
-) -> "dgl.DGLGraph":
-    """Ẩn (mask) mọi cạnh PPI có ít nhất 1 đầu là node valid/test — chống leak khi train.
-
-    ppi_graph_global là 1 đồ thị PPI TOÀN CỤC dựng từ toàn bộ protein (không phân biệt
-    train/valid/test). PPIEncoder (GraphSAGE) mặc định encode nguyên đồ thị này mỗi
-    epoch, nên embedding của 1 protein "train" có thể nhận message lan truyền từ
-    hàng xóm PPI đang thuộc tập valid/test — rò rỉ gián tiếp thông tin (sequence
-    feature) của valid/test vào lúc train (xem README mục "PPI leakage guard").
-
-    Hàm này trả về 1 bản sao ppi_graph nhưng CẮT mọi cạnh chạm tới `hidden_node_ids`
-    (thường là ppi_node_id của protein thuộc valid+test). Số node và node feature
-    giữ nguyên (node valid/test vẫn tồn tại nhưng bị cô lập, không có cạnh) — vì vậy
-    ppi_node_id lookup không đổi và graph vẫn tương thích với phần còn lại của code.
-    Dùng graph này CHỈ khi train; lúc validate/test luôn dùng ppi_graph_global gốc
-    (đầy đủ cạnh) để đánh giá đúng khả năng model dùng PPI thật.
-    """
-    if not hidden_node_ids:
-        return ppi_graph
-
-    num_nodes = ppi_graph.num_nodes()
-    device = ppi_graph.device
-    hidden_idx = torch.as_tensor(sorted(hidden_node_ids), dtype=torch.long, device=device)
-    hidden_idx = hidden_idx[hidden_idx < num_nodes]
-    hidden_mask = torch.zeros(num_nodes, dtype=torch.bool, device=device)
-    hidden_mask[hidden_idx] = True
-
-    src, dst = ppi_graph.edges()
-    keep_eids = (~(hidden_mask[src] | hidden_mask[dst])).nonzero(as_tuple=True)[0]
-    masked_graph = dgl.edge_subgraph(ppi_graph, keep_eids, relabel_nodes=False)
-    masked_graph.ndata["feat"] = ppi_graph.ndata["feat"]
-    return masked_graph
 
 
 def _resolve_data_dir() -> str:

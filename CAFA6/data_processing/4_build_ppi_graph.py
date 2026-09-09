@@ -41,7 +41,7 @@ import torch
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from data_processing.split_utils import load_split
+from data_processing.split_utils import build_train_only_ppi_graph, load_split
 
 # ── Cấu hình ─────────────────────────────────────────────────────────────────
 BASE_DIR   = Path("D:/CAFA6")
@@ -210,25 +210,6 @@ with open(ppi_index_path, "wb") as f:
 print(f"  Lưu protein index → {ppi_index_path}")
 
 
-def _build_train_only_ppi_graph(full_graph: dgl.DGLGraph, hidden_node_ids: set[int]) -> dgl.DGLGraph:
-    """Cắt mọi cạnh chạm tới hidden_node_ids (protein valid/test của 1 branch).
-    Giữ nguyên số node + node feature — chỉ hidden_node_ids bị cô lập (mất cạnh).
-    Cùng logic với train_Struct2GO2.build_train_only_ppi_graph() (bản runtime-fallback).
-    """
-    if not hidden_node_ids:
-        return full_graph
-    num_nodes = full_graph.num_nodes()
-    hidden_idx = torch.as_tensor(sorted(hidden_node_ids), dtype=torch.long)
-    hidden_idx = hidden_idx[hidden_idx < num_nodes]
-    hidden_mask = torch.zeros(num_nodes, dtype=torch.bool)
-    hidden_mask[hidden_idx] = True
-    src, dst = full_graph.edges()
-    keep_eids = (~(hidden_mask[src] | hidden_mask[dst])).nonzero(as_tuple=True)[0]
-    masked = dgl.edge_subgraph(full_graph, keep_eids, relabel_nodes=False)
-    masked.ndata["feat"] = full_graph.ndata["feat"]
-    return masked
-
-
 # ── Bước 8 (build-time PPI leakage guard) ────────────────────────────────────
 # Với mỗi branch đã có split_{ns}.json (từ split_protein_ids.py — chạy TRƯỚC
 # bước này), sinh sẵn 1 bản ppi_graph đã ẩn cạnh valid/test — để
@@ -244,7 +225,7 @@ for ns in ("bp", "mf", "cc"):
         continue
     hidden_acs = set(split["valid"]) | set(split["test"])
     hidden_ids = {protein_index[ac] for ac in hidden_acs if ac in protein_index}
-    train_graph = _build_train_only_ppi_graph(ppi_graph, hidden_ids)
+    train_graph = build_train_only_ppi_graph(ppi_graph, hidden_ids)
     out_path = PROC_DIR / f"ppi_graph_train_{ns}"
     with open(out_path, "wb") as f:
         pickle.dump(train_graph, f)

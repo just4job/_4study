@@ -8,8 +8,13 @@ Bật **GPU T4 x1** + **Internet**. Nếu lỗi DGL/numpy → **Restart session*
 
 Pipeline đã đổi (thêm Bước 2b, sửa vocab + PPI leakage guard — xem
 [README mục 3](README.md#3-pipeline-xử-lý-dữ-liệu--chi-tiết-từng-script) và
-[mục 4.5](README.md#45-chống-rò-rỉ-dữ-liệu-qua-ppi-ppi-leakage-guard)), nên
-dataset Kaggle phải được build lại **trên máy local** rồi pack lại:
+[mục 4.5](README.md#45-chống-rò-rỉ-dữ-liệu-qua-ppi-ppi-leakage-guard)).
+
+- **Đang có dataset cũ** (pack theo pipeline trên `main`) → xem
+  [mục migrate ngay bên dưới](#đang-dùng-dataset-cũ-pack-theo-pipeline-trên-main)
+  (~vài phút, không phải build lại, giữ nguyên `divided_data`).
+- **Muốn sửa triệt để** (gồm cả lọc vocab min-count) → build lại ở **máy local**
+  rồi pack lại:
 
 ```bash
 # Trên máy local (D:\CAFA6)
@@ -41,12 +46,36 @@ proceed_data/label_{mf,cc,bp}_network   ← co-occurrence chỉ tính từ train
 proceed_data/human_{MF,CC,BP}_ACS.json
 ```
 
+### Đang dùng dataset CŨ (pack theo pipeline trên `main`)?
+
+Không phải build lại từ đầu. Chạy migrate ngay trên Kaggle (~vài phút):
+
+```python
+%env DATA_DIR=/kaggle/working/CAFA6
+# --materialize: proceed_data đang là symlink tới /kaggle/input (read-only)
+!python /kaggle/working/CAFA6/scripts/migrate_old_data.py --materialize
+!python /kaggle/working/CAFA6/scripts/audit_data.py
+```
+
+Script suy ra `split_{ns}.json` **từ chính `divided_data` đang có** (giữ nguyên
+phân vùng train/valid/test cũ), rồi dựng `ppi_graph_train_{ns}` và dựng lại
+`label_{ns}_network` chỉ từ protein train.
+
+| Sửa được | Không sửa được |
+|---|---|
+| PPI leak (guard build-time), leak `label_{ns}_network` | Vocab min-count (mất cân bằng — chiều nhãn đã đóng băng trong `emb_label_*`) |
+
+Muốn sửa cả phần vocab thì phải build lại pipeline ở local theo các lệnh trên
+rồi upload dataset mới (khi đó **phải train lại từ đầu** vì `num_labels` đổi).
+
 > **Thiếu `ppi_graph_train_*` / `split_*.json` / `label_vocab_*.json`** → vẫn chạy
 > được nhưng rơi về đường fallback cũ (mask PPI lúc runtime — chậm và tốn RAM hơn;
 > vocab không lọc tần suất — mất cân bằng nặng). Xem cảnh báo `[WARN]` trong log.
 >
-> **Checkpoint cũ (train trước các fix này) KHÔNG dùng lại được** — `num_labels`
-> đã đổi sau khi vocab được lọc đúng. Phải train lại từ đầu.
+> **Checkpoint cũ:** nếu **build lại** (lọc vocab) thì `num_labels` đổi → checkpoint
+> cũ không load được, phải train lại từ đầu. Nếu chỉ **migrate** thì chiều nhãn
+> không đổi nên checkpoint cũ vẫn load được — nhưng nó được train khi còn leak,
+> nên vẫn nên train lại để có số liệu sạch.
 
 ---
 
