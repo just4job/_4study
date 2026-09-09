@@ -276,12 +276,90 @@ def _build_eval_collate_fn(seq_dim: int, label_dim: int):
     return _collate
 
 
+def _run_inference(
+    dataset,
+    model,
+    label_network,
+    ppi_graph,
+    ppi_node_emb,
+    use_ppi: bool,
+    seq_dim: int,
+    label_dim: int,
+    device,
+    criterion,
+    batch_size: int = 32,
+    desc: str = "eval",
+) -> tuple[list, list, list, float]:
+    """Forward pass 1 lần trên `dataset`, trả về (pred, actual, protein_list, avg_loss).
+
+    Dùng chung cho cả pass chọn threshold (trên valid) lẫn pass tính metric cuối
+    (trên split đang eval) — đảm bảo 2 pass xử lý giống hệt nhau, tránh lặp code.
+    """
+    collate_fn = _build_eval_collate_fn(seq_dim=seq_dim, label_dim=label_dim)
+    dataloader = GraphDataLoader(
+        dataset=dataset, batch_size=batch_size, drop_last=False, shuffle=False, collate_fn=collate_fn,
+    )
+    t_loss = 0.0
+    pred: list = []
+    actual: list = []
+    protein_list: list = []
+    model.eval()
+    with torch.no_grad():
+        for pids, graphs, labels, seq_feats, ppi_node_ids in tqdm(dataloader, desc=desc):
+            graphs = graphs.to(device)
+            seq_feats = seq_feats.to(device)
+            labels = labels.to(device)
+            ppi_node_ids = ppi_node_ids.to(device)
+            labels = torch.squeeze(labels)
+            if len(labels.shape) == 1:
+                labels = labels.unsqueeze(0)
+
+            logits = model(
+                graphs,
+                seq_feats,
+                label_network,
+                ppi_graph=ppi_graph if use_ppi else None,
+                ppi_node_ids=ppi_node_ids if use_ppi else None,
+                ppi_node_emb=ppi_node_emb,
+            )
+            logits = F.sigmoid(logits)
+            loss = criterion(logits, labels.float())
+
+            protein_list += pids
+            t_loss += loss.item()
+            pred += logits.tolist()
+            actual += labels.tolist()
+
+    avg_loss = t_loss / max(len(dataloader), 1)
+    return pred, actual, protein_list, avg_loss
+
+
+def _select_threshold(actual, pred, label_network, thresholds) -> tuple[float, float, float, float]:
+    """Quét `thresholds` trên (actual, pred) truyền vào, trả về (best_thresh, f_score,
+    precision, recall) tốt nhất. CHỈ gọi hàm này trên VALID (hoặc trên chính split
+    đang eval nếu đó đã LÀ valid) — không bao giờ gọi trên test, vì đó chính là
+    threshold-leak: chọn siêu tham số bằng cách nhìn thấy trước nhãn thật của test."""
+    best = (thresholds[0], 0.0, 0.0, 0.0)
+    for thresh in tqdm(thresholds, desc="threshold search"):
+        f_score, precision, recall = calculate_performance(actual, pred, label_network, threshold=thresh)
+        if f_score >= best[1]:
+            best = (thresh, f_score, precision, recall)
+    return best
+
+
 if __name__ == "__main__":
     
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('-branch', '--branch',type=str,default='mf')
-    parser.add_argument('-thresh', '--thresh',type=float,default=0.71)
+    parser.add_argument(
+        '-thresh', '--thresh', type=float, default=0.71,
+        help=(
+            "Threshold dùng CHỈ để liệt kê nhãn 'mới dự đoán' trong "
+            "test_result/{branch}_result.json. KHÔNG dùng cho F-max/precision/recall "
+            "báo cáo — threshold đó giờ tự chọn từ valid (xem [thresh-select] trong log)."
+        ),
+    )
     parser.add_argument('-batch', '--batch', type = str, default = '1')
     parser.add_argument("-model_path", "--model_path", type=str, default="")
     parser.add_argument(
@@ -398,53 +476,54 @@ if __name__ == "__main__":
             f"(collate pads to model; metrics trim to dataset)"
         )
 
-    collate_fn = _build_eval_collate_fn(seq_dim=seq_dim, label_dim=label_dim)
-
     batch_size = 32
-    test_dataloader = GraphDataLoader(
-        dataset=test_dataset,
-        batch_size=batch_size,
-        drop_last=False,
-        shuffle=False,
-        collate_fn=collate_fn,
-    )
     criterion = nn.CrossEntropyLoss()
     logger.info('#########'+args.branch+'###########')
-    logger.info('########start testing###########') 
+    logger.info('########start testing###########')
 
-    t_loss = 0
-    test_batch_num = 0
-    pred = []
-    actual = []
-    protein_list = []
-    model.eval()
-    print("testing")
-    with torch.no_grad():
-        for i, (pids, graphs, labels, seq_feats, ppi_node_ids) in tqdm(enumerate(test_dataloader)):
-            graphs = graphs.to(device)
-            seq_feats = seq_feats.to(device)
-            labels = labels.to(device)
-            ppi_node_ids = ppi_node_ids.to(device)
-            labels = torch.squeeze(labels)
-            if len(labels.shape)==1:
-                labels = labels.unsqueeze(0)
-            
-            logits = model(
-                graphs,
-                seq_feats,
-                label_network,
-                ppi_graph=ppi_graph if args.use_ppi else None,
-                ppi_node_ids=ppi_node_ids if args.use_ppi else None,
-                ppi_node_emb=ppi_node_emb,
+    # 1) Chọn threshold trên VALID (không phải trên split đang eval) — chống
+    #    threshold-leak: trước đây threshold "tốt nhất" được chọn bằng cách quét
+    #    99 mức NGAY TRÊN chính tập test, thổi phồng F-max báo cáo. Nếu split
+    #    đang eval CHÍNH LÀ valid (vd. `--split valid` để tune) thì không cần
+    #    bước này — tự chọn threshold trên chính nó là hợp lệ.
+    best_thresh = None
+    if eval_split != "valid":
+        valid_path = os.path.join(data_dir, "divided_data", f"{args.branch}_valid_dataset")
+        if os.path.isfile(valid_path):
+            valid_dataset = _load_pickle(valid_path)
+            v_pred, v_actual, _, v_loss = _run_inference(
+                valid_dataset, model, label_network, ppi_graph, ppi_node_emb,
+                args.use_ppi, seq_dim, label_dim, device, criterion,
+                batch_size=batch_size, desc="valid (chọn threshold)",
             )
-            logits = F.sigmoid(logits)
-            
-            loss = criterion(logits, labels.float())
-            
-            protein_list += pids
-            t_loss += loss.item()
-            pred += logits.tolist()
-            actual += labels.tolist()
+            v_dim = _dataset_label_dim(valid_dataset)
+            v_pred, v_actual, _ = _trim_to_dataset_labels(v_pred, v_actual, v_dim)
+            best_thresh, v_fscore, v_precision, v_recall = _select_threshold(
+                v_actual, v_pred, label_network, Thresholds
+            )
+            msg = (
+                f"[thresh-select] threshold={best_thresh} chọn từ VALID "
+                f"(f_score_valid={v_fscore:.4f}, loss_valid={v_loss:.4f}) -> áp dụng "
+                f"nguyên threshold này lên '{eval_split}', KHÔNG quét lại trên '{eval_split}'."
+            )
+            logger.info(msg)
+            print(msg)
+        else:
+            msg = (
+                f"[thresh-select][WARN] Không tìm thấy {valid_path} — fallback: quét "
+                f"threshold trực tiếp trên '{eval_split}' (LEAK nếu '{eval_split}'=test). "
+                "Chạy divide_data.py để có đủ valid_dataset và tránh cảnh báo này."
+            )
+            logger.warning(msg)
+            print(msg)
+
+    # 2) Forward pass trên split đang eval (test/valid/train theo --split)
+    print("testing")
+    pred, actual, protein_list, t_loss = _run_inference(
+        test_dataset, model, label_network, ppi_graph, ppi_node_emb,
+        args.use_ppi, seq_dim, label_dim, device, criterion,
+        batch_size=batch_size, desc=f"{eval_split} eval",
+    )
     
     # 为了保持可控，这里使用传入的thresh来确定最终分类结果
     assert len(pred) == len(actual)
@@ -476,21 +555,21 @@ if __name__ == "__main__":
     with open(os.path.join(result_dir, args.branch + "_result.json"), "w") as f:
         json.dump(result, f, indent=4)
         
-    t_loss /= len(test_dataloader)
     flat_actual = np.asarray(actual).reshape(-1)
     flat_pred = np.asarray(pred).reshape(-1)
     auc_score = roc_auc_flat(flat_actual, flat_pred)
     aupr = cacul_aupr(flat_actual, flat_pred)
     fpr, tpr, _ = roc_curve(flat_actual, flat_pred, pos_label=1)
 
-    each_best_fcore = 0
-    each_best_scores = []
-    for thresh in tqdm(Thresholds):
-        f_score,precision, recall  = calculate_performance(actual, pred, label_network,threshold=thresh)
-        if f_score >= each_best_fcore:
-            each_best_fcore = f_score
-            each_best_scores = [thresh, f_score, recall, precision]
-    t, f_score, recall, precision = each_best_scores[0], each_best_scores[1], each_best_scores[2], each_best_scores[3]
+    # 3) Áp threshold đã chọn từ valid (best_thresh) lên split đang eval — KHÔNG
+    #    quét lại 99 mức trên chính nó. Chỉ khi không có valid_dataset (best_thresh
+    #    is None, xem cảnh báo [thresh-select] ở trên) mới fallback quét trực tiếp
+    #    (giữ hành vi cũ để không crash, nhưng đã cảnh báo rõ đây là leak).
+    if best_thresh is not None:
+        t = best_thresh
+        f_score, precision, recall = calculate_performance(actual, pred, label_network, threshold=t)
+    else:
+        t, f_score, precision, recall = _select_threshold(actual, pred, label_network, Thresholds)
     logger.info('loss: {}, thresh: {}, f_score {}'.format(t_loss, t, f_score))
     logger.info('auc {}, recall {}, precision {},aupr {}'.format(auc_score, recall, precision, aupr))
     print('loss: {}, thresh: {}, f_score {}'.format(t_loss, t, f_score))

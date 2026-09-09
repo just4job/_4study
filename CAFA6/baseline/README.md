@@ -113,7 +113,7 @@ Trên CAFA6 / Kaggle thường dùng:
 | Kiến trúc | Nhỏ hơn (không PPI) hoặc one-hot | Struct2GO2 + PPI + ESM seq |
 | Thời gian train | Đủ 20 epoch, model lớn (hid 512) | Ngắn hơn (2–15 epoch), hid 256 |
 | Metric so sánh | Thường **test** trong paper | Log của bạn: **valid** / test copy valid |
-| Ngưỡng suy luận | Quét 99 mức khi train | Train: 5 mức (Kaggle); test: quét lại trong eval |
+| Ngưỡng suy luận | Quét 99 mức khi train | Train: 5 mức (Kaggle); test: threshold chọn từ **valid** rồi áp sang test (đã fix threshold-leak — xem [EVAL.md](EVAL.md) và [README chính mục 5](../README.md#5-đánh-giá)) |
 
 Khi viết báo cáo, nên ghi rõ: *baseline theo Table 1 (Struct2GO / with one-hot)* và *cấu hình train CAFA6 (epoch, hid, PPI, preset Kaggle)*.
 

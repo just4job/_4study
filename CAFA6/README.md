@@ -187,7 +187,7 @@ mkdir D:\CAFA6\test_result
 |:---:|---|---|:---:|
 | 1 | `1_get_valid_ids.py` | `valid_protein_ids.csv` | vài phút |
 | 2 | `go_anno.py` | `HUMAN_protein_info.json` | 5–15 phút |
-| **2b** | **`split_protein_ids.py`** | **`split_{bp,mf,cc}.json`** | **vài giây** |
+| **2b** | **`split_protein_ids.py`** | **`split_{bp,mf,cc}.json`, `label_vocab_{bp,mf,cc}.json`** | **vài giây** |
 | 3 | `2_extract_struct_map.py` | `proteins_edges/*.txt` | vài giờ (tùy số PDB) |
 | 4a | `get_sequence.py` | `protein_node2onehot` | vài giờ |
 | 4b | `seq2vec.py` hoặc ESM-2 | `9606-avg-emb.pkl` | vài giờ |
@@ -282,9 +282,22 @@ gây rò rỉ gián tiếp thống kê valid/test vào lúc train (xem
 [mục 4.5](#45-chống-rò-rỉ-dữ-liệu-qua-ppi-ppi-leakage-guard)). Chạy bước này
 sớm để bước 6/7 có thể tự lọc "chỉ tính từ train".
 
-**Làm gì:** Với mỗi nhánh GO (bp/mf/cc), đọc danh sách protein có annotation
-(`human_{NS}_ACS.json`), chia ngẫu nhiên 70/20/10 (seed cố định, mặc định 42)
-thành train/valid/test, lưu ra 1 file JSON nhỏ.
+**Làm gì:** Với mỗi nhánh GO (bp/mf/cc):
+1. Đọc danh sách protein có annotation (`human_{NS}_ACS.json`), chia ngẫu nhiên
+   70/20/10 (seed cố định, mặc định 42) thành train/valid/test, lưu ra 1 file JSON nhỏ.
+2. Tính **`label_vocab_{ns}.json`** — danh sách GO term được coi là nhãn hợp lệ,
+   lọc theo tần suất tối thiểu (`--min-bp 250`, `--min-other 100`, khớp mặc định
+   `2_build_go_namespace.py`) nhưng **CHỈ ĐẾM TRÊN PROTEIN TRAIN** vừa chia ở bước 1.
+
+**Vì sao bước 2 quan trọng (bug đã sửa):** trước đây `2_build_go_namespace.py` có
+tính bộ lọc min-count này, nhưng `3_build_graph_dataset.py` lại **rebuild vocab
+từ đầu không lọc** rồi ghi đè lên — bộ lọc coi như vô hiệu, khiến cả GO term chỉ
+xuất hiện ở **1 protein duy nhất** cũng thành 1 nhãn model phải học (mất cân bằng
+cực đoan, gây khó hội tụ và F-max thấp giả tạo). Giờ `3_build_graph_dataset.py`
+đọc thẳng `label_vocab_{ns}.json` do bước này sinh ra làm vocab chính thức. Đếm
+tần suất trên train (không phải toàn bộ) để không lặp lại kiểu leak giống
+`label_{ns}_network` — GO term chỉ xuất hiện ở valid/test (không có trong train)
+bị loại tự nhiên, hợp lý vì model không có tín hiệu train nào cho nhãn đó.
 
 **Input:**
 ```
@@ -302,11 +315,18 @@ D:\CAFA6\proceed_data\split_cc.json
       "seed": 42, "train_ratio": 0.7, "valid_ratio": 0.2,
       "train": ["A0A0A0MRZ7", ...], "valid": [...], "test": [...]
     }
+
+D:\CAFA6\proceed_data\label_vocab_bp.json
+D:\CAFA6\proceed_data\label_vocab_mf.json
+D:\CAFA6\proceed_data\label_vocab_cc.json
+    ["GO:0000001", ...]   ← đã lọc min-count, đếm trên train
 ```
 
 **Chạy:**
 ```bash
 python data_processing/split_protein_ids.py
+# Đổi ngưỡng min-count nếu cần (vd. dữ liệu ít, ngưỡng mặc định lọc quá tay):
+python data_processing/split_protein_ids.py --min-bp 100 --min-other 50 --force
 ```
 
 > **Lưu ý:** đây là split trên tập "protein có GO annotation" — TẬP LỚN HƠN
@@ -319,6 +339,11 @@ python data_processing/split_protein_ids.py
 > **`--seed` phải khớp** giữa `split_protein_ids.py` và `divide_data.py` nếu
 > Dương từng đổi seed thủ công — mặc định cả 2 đều là `42` nên không cần làm
 > gì thêm trong trường hợp thông thường.
+>
+> **Migration:** nếu đã build `proceed_data`/`divided_data` TRƯỚC khi có fix này
+> (vocab không lọc, `num_labels` lớn hơn), phải chạy lại từ bước 2b → 6 → 7 → 8
+> (`--force`) rồi **train lại** — checkpoint cũ có `out_dim`/`num_labels` khác,
+> không load được vào model mới và số liệu F-max không so sánh 1:1 được.
 
 ---
 
@@ -564,6 +589,7 @@ D:\CAFA6\proceed_data\dict_sequence_feature     (bước 4c, 1024-dim)
 D:\CAFA6\proceed_data\ppi_protein_index         (bước 6)
 D:\CAFA6\proceed_data\human_{BP/MF/CC}_ACS.json (bước 2)
 D:\CAFA6\proceed_data\split_{ns}.json           (bước 2b, nếu có — lọc label_network)
+D:\CAFA6\proceed_data\label_vocab_{ns}.json     (bước 2b, nếu có — vocab đã lọc min-count từ train)
 ```
 
 **Output (tạo cho cả 3 nhánh bp / mf / cc):**
@@ -574,7 +600,7 @@ D:\CAFA6\proceed_data\split_{ns}.json           (bước 2b, nếu có — lọc
 | `emb_seq_feature_{ns}` | `{ID → Tensor}` sequence embedding | (1024,) |
 | `emb_label_{ns}` | `{ID → Tensor}` multi-hot GO label | (num_labels,) |
 | `emb_ppi_node_id_{ns}` | `{ID → int}` node index PPI graph | scalar, -1 nếu absent |
-| `label_vocab_{ns}.json` | `[GO_term_0, ...]` (từ TOÀN BỘ protein — không phải thống kê, không cần lọc) | list |
+| `label_vocab_{ns}.json` | `[GO_term_0, ...]` — **đọc thẳng từ `split_protein_ids.py`** (đã lọc min-count, đếm trên train) nếu có; ngược lại rebuild KHÔNG lọc từ toàn bộ protein (in `[WARN]`, pipeline cũ) | list |
 | `label_{ns}_network` | `dgl.DGLGraph` co-occurrence GO label — **chỉ tính từ protein train** nếu có `split_{ns}.json`, ngược lại từ toàn bộ (in `[WARN]`) | — |
 
 **Chạy:**
@@ -796,18 +822,44 @@ Dùng `DATA_DIR` và đường dẫn model tương ứng checkpoint sau train:
 
 ```bash
 set DATA_DIR=D:\CAFA6
-python eval_Struct2GO2.py -branch mf -thresh 0.71 ^
-    -model_path save_models/bestmodel_mf_96_0.0001_0.2.pkl
-
-python eval_Struct2GO2.py -branch cc -thresh 0.50
-python eval_Struct2GO2.py -branch bp  -thresh 0.40
+python eval_Struct2GO2.py -branch mf -model_path save_models/bestmodel_mf_96_0.0001_0.2.pkl
+python eval_Struct2GO2.py -branch cc
+python eval_Struct2GO2.py -branch bp
 ```
 
 | Output | Nội dung |
 |---|---|
-| `test_result/{branch}_result.json` | GO term mới dự đoán cho từng protein |
+| `test_result/{branch}_result.json` | GO term mới dự đoán cho từng protein (dùng `-thresh`, mặc định 0.71) |
 | `test_result/{branch}_roc_curve.png` | Biểu đồ ROC |
 | `log/test_{branch}.log` | F-max, AUC, AUPR, Precision, Recall |
+
+### Chống threshold-leak: threshold chọn từ valid, không phải từ test
+
+**Trước đây:** threshold "tốt nhất" cho F-max/precision/recall được chọn bằng cách
+quét 99 mức (0.01–0.99) **ngay trên chính tập đang eval** (thường là test) rồi lấy
+mức cho F-max cao nhất — đây là leak: chọn siêu tham số bằng cách nhìn thấy trước
+nhãn thật của chính tập dùng để báo cáo kết quả, thổi phồng F-max.
+
+**Giờ:** `eval_Struct2GO2.py` tự động chạy thêm 1 lượt forward trên
+`{branch}_valid_dataset`, quét 99 mức **trên valid** để chọn `best_thresh`, rồi áp
+**nguyên** threshold đó lên tập đang eval (test) — không quét lại. Log in rõ:
+
+```
+[thresh-select] threshold=0.42 chọn từ VALID (f_score_valid=0.5831, loss_valid=0.1207) -> áp dụng nguyên threshold này lên 'test', KHÔNG quét lại trên 'test'.
+```
+
+- Nếu đang eval `--split valid` (tune trực tiếp trên valid) thì không cần bước
+  này — tự quét trên chính valid vẫn hợp lệ (đó là mục đích của tập valid).
+- Nếu **không tìm thấy** `{branch}_valid_dataset` (Kaggle pack thiếu, hoặc chạy
+  `divide_data.py --only train`), fallback về hành vi cũ (quét trực tiếp trên
+  split đang eval) kèm cảnh báo `[thresh-select][WARN] ... (LEAK nếu 'test')` —
+  không crash, nhưng số liệu khi đó cần hiểu là chưa hết leak.
+- Cờ `-thresh` (mặc định 0.71) **không còn ảnh hưởng tới F-max/precision/recall
+  báo cáo** — chỉ dùng để liệt kê nhãn "mới dự đoán" trong `{branch}_result.json`.
+
+**Migration:** số F-max/AUPR trước và sau fix này **không so sánh 1:1 được** —
+số cũ có thể cao hơn giả tạo do threshold-leak. Nên chạy lại `eval_Struct2GO2.py`
+cho mọi checkpoint đang dùng để có số liệu đáng tin cậy trước khi đưa vào báo cáo.
 
 ---
 
@@ -879,6 +931,23 @@ python scripts/run_fusion_ablation.py --configs ppi_attn ppi_bi_attn
 | `eval_Struct2GO2.py` | Path | Dùng env `DATA_DIR` + `-model_path` |
 
 ### Lỗi thường gặp
+
+**MF có 5136 label thay vì ~400 (hoặc số label MF/BP/CC tự nhiên "nhảy" sau khi sửa vocab)**
+```
+Đây chính là bug đã sửa ở Bước 2b: trước đây 3_build_graph_dataset.py rebuild
+vocab KHÔNG lọc tần suất (mọi GO term, kể cả chỉ xuất hiện ở 1 protein, đều
+thành nhãn) — với MF từng thấy đúng 5136 label kiểu này (một số script trong
+scripts/ có hardcode "422 labels" để nhận diện dataset MF "final-data" đã được
+lọc thủ công trước đây — vd. repair_mf_train.py, kaggle_link_data.py,
+retrain_fusion_bc.py, diag_mf_train.py, pack_for_kaggle.py).
+
+Sau khi chạy split_protein_ids.py (Bước 2b), số label MF/BP/CC sẽ được TÍNH
+LẠI đúng theo --min-bp/--min-other (mặc định 250/100, đếm trên train) — số
+này CÓ THỂ khác 422 (tuỳ go.obo version, valid_protein_ids, ngưỡng min-count).
+Đây là kết quả ĐÚNG theo pipeline mới, không phải lỗi. Các cảnh báo "422
+labels"/"5136 labels" trong scripts/ ở trên vẫn còn hardcode số cũ — nếu dùng
+lại các script đó, kiểm tra tay số label thực tế thay vì tin theo cảnh báo.
+```
 
 **`FileNotFoundError: ppi_graph_global`**
 ```
@@ -958,16 +1027,16 @@ python data_processing/seq2vec.py -i D:/raw_data/seq.fasta -o D:/CAFA6/proceed_d
 python data_processing/read_seqvec_features.py
 python data_processing/3_uniprot_mapping.py
 python data_processing/4_build_ppi_graph.py           # đọc split_{ns}.json -> ppi_graph_train_*
-python data_processing/3_build_graph_dataset.py       # đọc split_{ns}.json -> label_*_network chỉ từ train
+python data_processing/3_build_graph_dataset.py       # đọc split_{ns}.json -> label_*_network + label_vocab_* chỉ từ train
 python data_processing/divide_data.py                 # đọc lại split_{ns}.json
 python train_Struct2GO2.py -branch mf -dropout 0.2
 python train_Struct2GO2.py -branch cc -dropout 0.2
 python train_Struct2GO2.py -branch bp  -dropout 0.1
 # Hoặc trên Kaggle T4:
 # DGL_CUDA=1 DATA_DIR=/kaggle/working/CAFA6 python train_Struct2GO2.py -branch mf --kaggle
-python eval_Struct2GO2.py -branch mf -thresh 0.71
-python eval_Struct2GO2.py -branch cc -thresh 0.50
-python eval_Struct2GO2.py -branch bp -thresh 0.40
+python eval_Struct2GO2.py -branch mf   # F-max/AUC/AUPR tự chọn threshold từ valid (mục 5)
+python eval_Struct2GO2.py -branch cc
+python eval_Struct2GO2.py -branch bp
 ```
 
 ---

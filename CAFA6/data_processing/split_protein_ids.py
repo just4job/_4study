@@ -20,6 +20,8 @@ Output:
   proceed_data/split_bp.json
   proceed_data/split_mf.json
   proceed_data/split_cc.json
+  proceed_data/label_vocab_bp.json / _mf / _cc   ← GO term lọc theo tần suất,
+                                                    ĐẾM CHỈ TRÊN PROTEIN TRAIN
 
 Lưu ý: đây là split theo "protein có GO annotation cho nhánh đó" — TẬP LỚN
 HƠN so với "protein có đủ dữ liệu cuối cùng" (emb_graph_{ns}, sau khi bước 3/7
@@ -27,6 +29,17 @@ lọc bỏ protein thiếu contact map). divide_data.py (bước 8) sẽ tự gi
 (intersect) split này với emb_graph_{ns}.keys() để ra dataset cuối cùng — 1
 protein bị bỏ vì thiếu contact map thì bỏ luôn ở cả 3 tập, không đổi ý nghĩa
 train/valid/test của các protein còn lại.
+
+Bộ lọc tần suất GO term (min-count): trước đây 2_build_go_namespace.py có tính
+bộ lọc này (--min-bp/--min-other) nhưng 3_build_graph_dataset.py lại REBUILD
+vocab từ đầu (không lọc) rồi ghi đè lên — bộ lọc coi như vô hiệu, khiến cả
+những GO term chỉ xuất hiện ở 1 protein cũng thành nhãn phải học (mất cân bằng
+cực đoan). Script này tính lại bộ lọc, đúng min-count mặc định
+(min_bp=250, min_other=100), nhưng CHỈ ĐẾM TRÊN TẬP TRAIN (không phải toàn bộ
+dữ liệu như 2_build_go_namespace.py) — tránh để thống kê tần suất của valid/test
+rò rỉ vào việc quyết định "GO term nào được coi là nhãn hợp lệ".
+3_build_graph_dataset.py giờ đọc thẳng label_vocab_{ns}.json này làm vocab
+chính thức thay vì tự rebuild.
 """
 
 import argparse
@@ -39,7 +52,7 @@ if __name__ == "__main__" and __package__ in (None, ""):
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from data_processing.split_utils import save_split, split_protein_ids
+from data_processing.split_utils import compute_label_vocab, save_split, save_vocab, split_protein_ids
 
 
 def _resolve_data_dir() -> Path:
@@ -69,6 +82,14 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42, help="Phải khớp seed dùng ở divide_data.py")
     parser.add_argument("--train-ratio", type=float, default=0.7)
     parser.add_argument("--valid-ratio", type=float, default=0.2)
+    parser.add_argument(
+        "--min-bp", type=int, default=250,
+        help="Số protein TRAIN tối thiểu để giữ 1 GO term nhánh BP (khớp mặc định 2_build_go_namespace.py)",
+    )
+    parser.add_argument(
+        "--min-other", type=int, default=100,
+        help="Số protein TRAIN tối thiểu để giữ 1 GO term nhánh MF/CC",
+    )
     parser.add_argument("--force", action="store_true", help="Ghi đè split_{ns}.json đã tồn tại")
     args = parser.parse_args()
 
@@ -102,6 +123,16 @@ def main() -> None:
         print(
             f"{ns}: {len(train_keys):,} train / {len(valid_keys):,} valid / "
             f"{len(test_keys):,} test  (seed={args.seed}) -> {path}"
+        )
+
+        min_count = args.min_bp if ns == "bp" else args.min_other
+        all_terms_unfiltered = len({t for terms in protein_labels.values() for t in terms})
+        vocab = compute_label_vocab(protein_labels, train_keys, min_count)
+        vocab_out = save_vocab(proc_dir, ns, vocab)
+        print(
+            f"{ns}: label_vocab = {len(vocab):,} GO term "
+            f"(min_count={min_count}, chỉ đếm trên {len(train_keys):,} protein train; "
+            f"trước khi lọc: {all_terms_unfiltered:,} term) -> {vocab_out}"
         )
 
 
