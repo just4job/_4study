@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import pickle
+import sys
 import time
 from pathlib import Path
 
@@ -79,6 +80,21 @@ def build_ppi_graph(ppi_file: Path, ensp2uniprot: dict[str, str], valid_ids: set
     return graph
 
 
+def estimate_precompute_bytes(graph: nx.Graph) -> tuple[int, int]:
+    """Ước lượng RAM mà Node2Vec.precompute_probabilities() sẽ chiếm.
+
+    Với p != 1 hoặc q != 1, node2vec phải dùng random walk BẬC 2: với mỗi cạnh
+    (v, u) nó lưu 1 vector xác suất dài deg(u). Tổng số float vì thế là
+    Σ_v Σ_{u ∈ N(v)} deg(u) = Σ_u deg(u)^2 — tăng theo BÌNH PHƯƠNG bậc, nên
+    vài hub PPI bậc ngàn là đủ làm nổ RAM. Cộng thêm overhead dict cho mỗi cặp.
+
+    Trả về (bytes ước lượng, Σ deg^2).
+    """
+    sum_deg_sq = sum(d * d for _, d in graph.degree())
+    overhead = 2 * graph.number_of_edges() * 120  # dict/np object cho mỗi cặp có hướng
+    return sum_deg_sq * 8 + overhead, sum_deg_sq
+
+
 def train_node2vec(
     graph: nx.Graph,
     dimensions: int,
@@ -90,7 +106,13 @@ def train_node2vec(
     min_count: int,
     epochs: int,
     workers: int,
+    temp_folder: Path | None = None,
 ):
+    kwargs = {}
+    if temp_folder is not None:
+        # joblib memmap ra đĩa thay vì giữ toàn bộ trong RAM của từng worker.
+        temp_folder.mkdir(parents=True, exist_ok=True)
+        kwargs["temp_folder"] = str(temp_folder)
     node2vec = Node2Vec(
         graph,
         dimensions=dimensions,
@@ -99,6 +121,7 @@ def train_node2vec(
         p=p,
         q=q,
         workers=workers,
+        **kwargs,
     )
     model = node2vec.fit(window=window, min_count=min_count, epochs=epochs)
     embeddings = {str(node): np.asarray(model.wv[str(node)], dtype=np.float32) for node in graph.nodes()}
@@ -119,8 +142,25 @@ def main() -> None:
     parser.add_argument("--window", type=int, default=10)
     parser.add_argument("--min-count", type=int, default=1)
     parser.add_argument("--epochs", type=int, default=5)
-    parser.add_argument("--workers", type=int, default=1, help="Keep this at 1 on Windows")
-    parser.add_argument("--min-score", type=int, default=400, help="Minimum confidence score used when the PPI file includes a score column")
+    parser.add_argument(
+        "--workers", type=int, default=1,
+        help="Để 1 trừ khi chắc chắn đủ RAM: joblib NHÂN BẢN bảng xác suất bậc 2 "
+             "cho mỗi worker, nên workers=8 tốn gần 8 lần RAM",
+    )
+    parser.add_argument(
+        "--temp-folder", type=Path, default=None,
+        help="Thư mục cho joblib memmap ra đĩa (giảm RAM khi --workers > 1)",
+    )
+    parser.add_argument(
+        "--max-memory-gb", type=float, default=8.0,
+        help="Dừng trước khi chạy nếu ước lượng RAM vượt ngưỡng này (0 = tắt kiểm tra)",
+    )
+    parser.add_argument(
+        "--min-score", type=int, default=700,
+        help="Ngưỡng combined_score. Mặc định 700 để KHỚP với 4_build_ppi_graph.py "
+             "(PPI_SCORE_THRESHOLD=700); hạ xuống 400 làm đồ thị dày lên nhiều lần "
+             "và RAM tăng theo bình phương bậc",
+    )
     args = parser.parse_args()
 
     start = time.time()
@@ -133,6 +173,33 @@ def main() -> None:
     print("Step 2 - Building PPI graph ...")
     graph = build_ppi_graph(args.ppi_file, ensp2uniprot, valid_ids, args.min_score)
     print(f"  PPI graph: {graph.number_of_nodes():,} nodes, {graph.number_of_edges():,} edges")
+
+    est_bytes, sum_deg_sq = estimate_precompute_bytes(graph)
+    degrees = sorted((d for _, d in graph.degree()), reverse=True)
+    est_gb = est_bytes / 1024**3 * max(args.workers, 1)
+    print(
+        f"  Bậc: lớn nhất {degrees[0] if degrees else 0:,}, "
+        f"trung bình {2 * graph.number_of_edges() / max(graph.number_of_nodes(), 1):.1f}"
+    )
+    print(f"  Sum(deg^2) = {sum_deg_sq:,}")
+    print(
+        f"  RAM ước lượng cho precompute bậc 2: ~{est_bytes / 1024**3:.1f} GB"
+        + (f" x {args.workers} worker = ~{est_gb:.1f} GB" if args.workers > 1 else "")
+    )
+    if args.max_memory_gb > 0 and est_gb > args.max_memory_gb:
+        print(
+            f"\n[FAIL] Ước lượng ~{est_gb:.1f} GB > --max-memory-gb {args.max_memory_gb}.\n"
+            "  Chạy tiếp gần như chắc chắn làm treo máy. Cách giảm, theo thứ tự hiệu quả:\n"
+            f"    1. Tăng --min-score (đang {args.min_score}; 700 = ngưỡng 4_build_ppi_graph.py dùng)\n"
+            "    2. Đặt --workers 1 (mỗi worker giữ 1 bản sao bảng xác suất)\n"
+            "    3. Thêm --temp-folder /duong/dan (joblib memmap ra đĩa)\n"
+            "    4. Dùng -p 1 -q 1 (walk bậc 1, tương đương DeepWalk)\n"
+            "    5. Nới --max-memory-gb nếu bạn thật sự có đủ RAM",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    if args.p == 1.0 and args.q == 1.0:
+        print("  (p=q=1 -> random walk bậc 1)")
     if graph.number_of_nodes() == 0:
         raise ValueError("PPI graph is empty. Check the input file, mapping file, and min-score filter.")
 
@@ -149,6 +216,7 @@ def main() -> None:
         min_count=args.min_count,
         epochs=args.epochs,
         workers=args.workers,
+        temp_folder=args.temp_folder,
     )
 
     args.output_file.parent.mkdir(parents=True, exist_ok=True)
