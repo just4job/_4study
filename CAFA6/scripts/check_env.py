@@ -30,6 +30,19 @@ from pathlib import Path
 # nên trên 3.9 chúng chết ngay lúc import với TypeError.
 MIN_PY = (3, 10)
 
+# Dependency mà `import dgl` cần nhưng metadata của wheel dgl KHÔNG khai báo đủ
+# -> pip install dgl xong vẫn thiếu. Mỗi cái chỉ lộ ra SAU khi cái trước đã có,
+# nên kiểm tra trọn nhóm ở đây để không phải sửa từng vòng một.
+DGL_DEPS = [
+    ("packaging", "packaging", "dgl import lúc khởi động: dgl/utils/__init__.py"),
+    ("yaml", "PyYAML", "dgl import lúc khởi động: dgl/graphbolt/impl/ondisk_dataset.py "
+                       "(gói pip tên PyYAML, KHÔNG phải 'yaml')"),
+    ("pydantic", "pydantic", "dgl import lúc khởi động: schema của dgl.graphbolt"),
+    ("psutil", "psutil", "dgl import lúc khởi động: dgl.graphbolt"),
+    ("torchdata", "torchdata", "dgl 2.x import torchdata.datapipes — torchdata >= 0.10 "
+                               "đã bỏ module này, phải dùng torchdata==0.9.0"),
+]
+
 # (module import, tên gói pip, dùng để làm gì)
 LOCAL_PKGS = [
     ("Bio", "biopython", "đọc PDB.gz + FASTA (2_extract_struct_map, get_sequence, 5_build_seq_feature)"),
@@ -39,7 +52,7 @@ LOCAL_PKGS = [
     ("tqdm", "tqdm", "progress bar"),
     ("requests", "requests", "UniProt REST API (3_uniprot_mapping)"),
     ("torch", "torch", "5_build_seq_feature, 4_build_ppi_graph, 3_build_graph_dataset"),
-    ("packaging", "packaging", "dgl cần lúc import (dgl/utils/__init__.py) — code trong repo không import trực tiếp"),
+    *DGL_DEPS,
     ("dgl", "dgl", "4_build_ppi_graph, 3_build_graph_dataset"),
     ("esm", "fair-esm", "ESM-2 encoder (5_build_seq_feature)"),
 ]
@@ -50,7 +63,7 @@ LOCAL_OPTIONAL_PKGS = [
 ]
 KAGGLE_PKGS = [
     ("torch", "torch", "train/eval"),
-    ("packaging", "packaging", "dgl cần lúc import (dgl/utils/__init__.py) — code trong repo không import trực tiếp"),
+    *DGL_DEPS,
     ("dgl", "dgl", "train/eval — Kaggle KHÔNG cài sẵn, xem hướng dẫn cuối"),
     ("numpy", "numpy", "train/eval"),
     ("sklearn", "scikit-learn", "model/evaluation.py (f1, precision, recall)"),
@@ -428,13 +441,14 @@ def print_install_help(target: str) -> None:
         "  pip install networkx node2vec\n"
     )
     print(
-        "  pip install dgl -f https://data.dgl.ai/wheels/repo.html\n"
-        "  # dgl kéo theo 2 bẫy, cả hai đều KHÔNG phải lỗi bản dgl:\n"
-        "  #  1) thiếu `packaging`      -> pip install packaging\n"
-        "  #  2) torchdata >= 0.10 đã bỏ hẳn torchdata.datapipes mà dgl 2.x import\n"
-        "  #     -> pip install --no-deps 'torchdata==0.9.0'\n"
-        "  #        (hoặc: python scripts/kaggle_fix_dgl.py --no-install, script này\n"
-        "  #         viết lại import trong dgl sang torch.utils.data.datapipes)\n"
+        "  pip install dgl -f https://data.dgl.ai/wheels/repo.html\n\n"
+        "  # Wheel dgl KHÔNG khai báo đủ dependency -> cài dgl xong vẫn thiếu, và\n"
+        "  # mỗi cái chỉ lộ ra sau khi cái trước đã có. Cài trọn nhóm 1 lần:\n"
+        "  pip install packaging PyYAML pydantic psutil\n"
+        "  pip install --no-deps 'torchdata==0.9.0'   # >=0.10 đã bỏ torchdata.datapipes\n\n"
+        "  # torchdata==0.9.0 vẫn lỗi (lệch ABI với torch mới) -> vá thẳng dgl:\n"
+        "  #   python scripts/kaggle_fix_dgl.py --no-install\n"
+        "  # (đổi import trong dgl sang torch.utils.data.datapipes)\n"
         "  # Pip không tìm được wheel nào -> tạo env Python 3.11, đừng build từ nguồn.\n"
     )
     print(

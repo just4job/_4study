@@ -55,6 +55,11 @@ _DGL_RUNTIME_DEPS = (
     "requests",
     "psutil",
     "tqdm",
+    # Ba gói dưới cũng bị `import dgl` yêu cầu nhưng wheel dgl không khai báo.
+    # Kaggle có sẵn nên trước đây không lộ; ở env sạch thì thiếu -> dgl chết.
+    "packaging",
+    "pyyaml",
+    "pydantic",
 )
 
 # Keep the wheel search narrow. Kaggle T4 often exposes CUDA 12.x, but DGL wheels

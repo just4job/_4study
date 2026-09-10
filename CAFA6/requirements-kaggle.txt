@@ -10,10 +10,13 @@
 # (import được KHÔNG có nghĩa là dùng được).
 
 dgl>=1.1.2         # PHẢI tự cài — Kaggle không có sẵn
-packaging          # dgl import nó trong dgl/utils/__init__.py; thiếu thì dgl
-                   # fallback sang setuptools.extern.packaging — đã bị gỡ khỏi
-                   # setuptools đời mới -> `import dgl` chết. Repo không import
-                   # trực tiếp nên rất dễ bỏ sót.
+packaging          # 5 gói dưới đây là dependency runtime của dgl mà wheel dgl KHÔNG
+PyYAML             # khai báo -> `pip install dgl` xong vẫn thiếu, và mỗi cái chỉ lộ
+pydantic           # ra sau khi cái trước đã có. Repo không import chúng trực tiếp.
+psutil             #   packaging -> dgl/utils/__init__.py
+                   #   PyYAML/pydantic/psutil -> dgl.graphbolt
+torchdata<0.10     # dgl 2.x import torchdata.datapipes; torchdata >= 0.10 bỏ hẳn
+                   # module đó. Cài bằng: pip install --no-deps "torchdata==0.9.0"
 
 # Dưới đây Kaggle đã cài sẵn, liệt kê để biết code phụ thuộc gì:
 torch              # train/eval
