@@ -358,17 +358,18 @@ python data_processing/split_protein_ids.py --min-bp 100 --min-other 50 --force
 ### Đang có DATA CŨ (build theo pipeline trên `main`, chưa có Bước 2b)?
 
 Data cũ **vẫn chạy được** với code mới (các đường fallback tự kích hoạt kèm
-`[WARN]`), nhưng còn 3 vấn đề. Có 2 cách xử lý:
+`[WARN]`), nhưng còn 3 vấn đề. Có 3 cách xử lý:
 
-| | **A. Migrate nhanh** (`scripts/migrate_old_data.py`) | **B. Build lại** (Bước 2b → 6 → 7 → 8) |
-|---|---|---|
-| Thời gian | ~vài phút (chỉ load lại dataset 1 lượt) | ~1–2 giờ |
-| Cần gì | Chỉ cần bản pack cũ (kể cả trên Kaggle) | `proceed_data` đầy đủ ở **máy local** (`proteins_edges/`, `dict_sequence_feature`, …) |
-| `divided_data` | **Giữ nguyên** (không chia lại) | Build lại |
-| Sửa PPI leak (build-time `ppi_graph_train_*`) | ✅ | ✅ |
-| Sửa leak `label_{ns}_network` (chỉ từ train) | ✅ | ✅ |
-| Sửa vocab min-count (mất cân bằng, MF 5136 label) | ❌ *(chiều nhãn đã đóng băng trong `emb_label_*`)* | ✅ |
-| Checkpoint cũ | Vẫn load được (chiều nhãn không đổi) | Không dùng lại được |
+| | **A. Migrate nhanh** | **A+. Migrate + `--relabel`** | **B. Build lại** (Bước 2b → 6 → 7 → 8) |
+|---|---|---|---|
+| Lệnh | `migrate_old_data.py` | `migrate_old_data.py --relabel` | Bước 2b → 6 → 7 → 8 |
+| Thời gian | ~vài phút | ~10–30 phút / nhánh | ~1–2 giờ |
+| Cần gì | Chỉ cần bản pack cũ (kể cả trên Kaggle) | Bản pack cũ + `divided_data` **ghi được** + chỗ trống ≈ file dataset lớn nhất | `proceed_data` đầy đủ ở **máy local** (`proteins_edges/`, `dict_sequence_feature`, …) |
+| `divided_data` | Giữ nguyên | Giữ nguyên split, **ghi đè `ds.label`** | Build lại toàn bộ |
+| Sửa PPI leak (build-time `ppi_graph_train_*`) | ✅ | ✅ | ✅ |
+| Sửa leak `label_{ns}_network` (chỉ từ train) | ✅ | ✅ | ✅ |
+| Sửa vocab min-count (mất cân bằng, MF 5136 label) | ❌ | ✅ | ✅ |
+| Checkpoint cũ | Vẫn load được | **Không** (`num_labels` đổi) | **Không** (`num_labels` đổi) |
 
 **Cách A — migrate nhanh:**
 
@@ -386,9 +387,39 @@ phân vùng cũ, không chia lại), rồi dựng `ppi_graph_train_{ns}` và d�
 `label_{ns}_network` chỉ từ protein train (bản cũ được backup `.bak`). Nhánh nào
 đã có `split_{ns}.json` thì bỏ qua.
 
-**Cách B — build lại** (khuyến nghị nếu muốn sửa cả mất cân bằng nhãn): chạy
-Bước 2b → 6 → 7 → 8 như [thứ tự chạy đầy đủ](#thứ-tự-chạy-đầy-đủ), rồi
-`pack_for_kaggle.py` và upload dataset mới. Phải **train lại từ đầu** vì
+**Cách A+ — thêm `--relabel` để sửa nốt vocab min-count** (không cần contact map,
+không cần `raw_data`, làm được từ chính bản pack):
+
+```bash
+# Xem vocab mới còn bao nhiêu nhãn TRƯỚC khi ghi gì:
+python scripts/migrate_old_data.py --relabel --dry-run
+
+python scripts/migrate_old_data.py --relabel                    # ngưỡng mặc định
+python scripts/migrate_old_data.py --relabel --min-bp 250 --min-other 100
+python scripts/audit_data.py
+```
+
+Vector nhãn chỉ phụ thuộc `human_{NS}_ACS.json` + vocab — cả hai đều có trong
+bản pack — nên tính lại được mà **không đụng tới contact map / seq feature /
+`ppi_node_id`** (những phần này trong dataset được giữ nguyên). Việc script làm:
+
+1. Tính `label_vocab_{ns}.json` mới bằng `compute_label_vocab(min_count)`, **chỉ
+   đếm trên protein train** của split đang có.
+2. Ghi đè `ds.label` của cả 3 dataset (`{ns}_{train,valid,test}_dataset`) theo
+   vocab mới — ghi qua file tạm rồi `os.replace`, nên nếu hết đĩa/ngắt giữa
+   chừng thì file cũ vẫn nguyên (và trên Kaggle nó thay symlink, không ghi vào
+   `/kaggle/input` read-only).
+3. Dựng lại `label_{ns}_network` theo vocab mới, chỉ từ protein train.
+
+Cảnh báo: `num_labels` đổi → **phải train lại từ đầu**, checkpoint cũ vô dụng.
+Chạy lại lần 2 với cùng ngưỡng là no-op (script tự phát hiện vocab không đổi).
+Trên Kaggle, `divided_data/*` mặc định là symlink tới `/kaggle/input`; nếu
+`/kaggle/working` không đủ chỗ cho nhánh đó thì chạy `--relabel` ở **máy local**
+rồi `pack_for_kaggle.py` upload dataset mới.
+
+**Cách B — build lại** (chỉ cần khi muốn đổi cả split hoặc dữ liệu nguồn thay
+đổi): chạy Bước 2b → 6 → 7 → 8 như [thứ tự chạy đầy đủ](#thứ-tự-chạy-đầy-đủ),
+rồi `pack_for_kaggle.py` và upload dataset mới. Phải **train lại từ đầu** vì
 `num_labels` đổi.
 
 > Dù chọn cách nào, chạy `python scripts/audit_data.py` sau đó để xác nhận

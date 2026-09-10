@@ -13,8 +13,11 @@ Pipeline đã đổi (thêm Bước 2b, sửa vocab + PPI leakage guard — xem
 - **Đang có dataset cũ** (pack theo pipeline trên `main`) → xem
   [mục migrate ngay bên dưới](#đang-dùng-dataset-cũ-pack-theo-pipeline-trên-main)
   (~vài phút, không phải build lại, giữ nguyên `divided_data`).
-- **Muốn sửa triệt để** (gồm cả lọc vocab min-count) → build lại ở **máy local**
-  rồi pack lại:
+- **Chỉ còn file zip cũ, không còn `proceed_data` gốc ở local?** Vẫn sửa được
+  cả vocab min-count bằng `migrate_old_data.py --relabel` — xem
+  [mục migrate](#đang-dùng-dataset-cũ-pack-theo-pipeline-trên-main).
+- **Muốn build lại hoàn toàn** (đổi cả split / dữ liệu nguồn đổi) → chạy ở **máy
+  local** rồi pack lại:
 
 ```bash
 # Trên máy local (D:\CAFA6)
@@ -61,21 +64,46 @@ Script suy ra `split_{ns}.json` **từ chính `divided_data` đang có** (giữ 
 phân vùng train/valid/test cũ), rồi dựng `ppi_graph_train_{ns}` và dựng lại
 `label_{ns}_network` chỉ từ protein train.
 
-| Sửa được | Không sửa được |
-|---|---|
-| PPI leak (guard build-time), leak `label_{ns}_network` | Vocab min-count (mất cân bằng — chiều nhãn đã đóng băng trong `emb_label_*`) |
+Mặc định script sửa 2 trong 3 vấn đề: PPI leak (guard build-time) và leak
+`label_{ns}_network`. Chiều nhãn không đổi → checkpoint cũ vẫn load được.
 
-Muốn sửa cả phần vocab thì phải build lại pipeline ở local theo các lệnh trên
-rồi upload dataset mới (khi đó **phải train lại từ đầu** vì `num_labels` đổi).
+**Sửa nốt vocab min-count bằng `--relabel`** (không cần contact map, không cần
+`raw_data` — chỉ cần chính bản pack):
+
+```python
+%env DATA_DIR=/kaggle/working/CAFA6
+# Xem trước vocab mới còn bao nhiêu nhãn, chưa ghi gì:
+!python /kaggle/working/CAFA6/scripts/migrate_old_data.py --relabel --dry-run
+
+# Chạy thật (ghi đè ds.label của divided_data theo vocab mới):
+!python /kaggle/working/CAFA6/scripts/migrate_old_data.py --materialize --relabel
+!python /kaggle/working/CAFA6/scripts/audit_data.py
+```
+
+Vector nhãn chỉ phụ thuộc `human_{NS}_ACS.json` + vocab (đều có trong bản pack),
+nên tính lại được mà không đụng tới graph cấu trúc / seq feature / `ppi_node_id`.
+Split giữ nguyên.
+
+Lưu ý khi chạy `--relabel` trên Kaggle:
+
+- `divided_data/*` mặc định là **symlink** tới `/kaggle/input`. Script ghi qua
+  file tạm rồi `os.replace`, nên nó **thay symlink** bằng file thật trong
+  `/kaggle/working` — cần chỗ trống ≈ kích thước dataset của nhánh đó (`mf_train`
+  là file nặng nhất). Hết chỗ → chạy `--relabel` cho từng nhánh
+  (`--branch mf`), hoặc chạy ở local rồi `pack_for_kaggle.py` upload lại.
+- `num_labels` đổi → **train lại từ đầu**, checkpoint cũ vô dụng.
+- Chạy lại lần 2 với cùng ngưỡng là no-op (script tự nhận ra vocab không đổi).
+- Đổi ngưỡng: `--min-bp 250 --min-other 100` (mặc định, khớp
+  `split_protein_ids.py`).
 
 > **Thiếu `ppi_graph_train_*` / `split_*.json` / `label_vocab_*.json`** → vẫn chạy
 > được nhưng rơi về đường fallback cũ (mask PPI lúc runtime — chậm và tốn RAM hơn;
 > vocab không lọc tần suất — mất cân bằng nặng). Xem cảnh báo `[WARN]` trong log.
 >
-> **Checkpoint cũ:** nếu **build lại** (lọc vocab) thì `num_labels` đổi → checkpoint
-> cũ không load được, phải train lại từ đầu. Nếu chỉ **migrate** thì chiều nhãn
-> không đổi nên checkpoint cũ vẫn load được — nhưng nó được train khi còn leak,
-> nên vẫn nên train lại để có số liệu sạch.
+> **Checkpoint cũ:** nếu **build lại** hoặc chạy `--relabel` thì `num_labels` đổi →
+> checkpoint cũ không load được, phải train lại từ đầu. Nếu chỉ **migrate** (không
+> `--relabel`) thì chiều nhãn không đổi nên checkpoint cũ vẫn load được — nhưng nó
+> được train khi còn leak, nên vẫn nên train lại để có số liệu sạch.
 
 ---
 
