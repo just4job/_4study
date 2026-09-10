@@ -39,6 +39,7 @@ LOCAL_PKGS = [
     ("tqdm", "tqdm", "progress bar"),
     ("requests", "requests", "UniProt REST API (3_uniprot_mapping)"),
     ("torch", "torch", "5_build_seq_feature, 4_build_ppi_graph, 3_build_graph_dataset"),
+    ("packaging", "packaging", "dgl cần lúc import (dgl/utils/__init__.py) — code trong repo không import trực tiếp"),
     ("dgl", "dgl", "4_build_ppi_graph, 3_build_graph_dataset"),
     ("esm", "fair-esm", "ESM-2 encoder (5_build_seq_feature)"),
 ]
@@ -49,6 +50,7 @@ LOCAL_OPTIONAL_PKGS = [
 ]
 KAGGLE_PKGS = [
     ("torch", "torch", "train/eval"),
+    ("packaging", "packaging", "dgl cần lúc import (dgl/utils/__init__.py) — code trong repo không import trực tiếp"),
     ("dgl", "dgl", "train/eval — Kaggle KHÔNG cài sẵn, xem hướng dẫn cuối"),
     ("numpy", "numpy", "train/eval"),
     ("sklearn", "scikit-learn", "model/evaluation.py (f1, precision, recall)"),
@@ -206,7 +208,13 @@ def check_packages(rep: Report, pkgs: list[tuple[str, str, str]], required: bool
                     f"pip install lại KHÔNG sửa được. Xem traceback đầy đủ:\n"
                     f"    python -c \"import {mod_name}\"\n"
                     f"Thiếu module khác -> cài module đó. Lỗi symbol/ABI -> bản\n"
-                    f"{pip_name} không khớp torch/numpy đang cài, phải hạ hoặc đổi bản.",
+                    f"{pip_name} không khớp torch/numpy đang cài, phải hạ hoặc đổi bản."
+                    + (
+                        "\nVới dgl, thủ phạm hay gặp nhất là thiếu `packaging`:"
+                        "\n    pip install packaging"
+                        if mod_name == "dgl"
+                        else ""
+                    ),
                 )
             continue
         loaded[mod_name] = mod

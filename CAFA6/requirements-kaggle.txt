@@ -10,6 +10,10 @@
 # (import được KHÔNG có nghĩa là dùng được).
 
 dgl>=1.1.2         # PHẢI tự cài — Kaggle không có sẵn
+packaging          # dgl import nó trong dgl/utils/__init__.py; thiếu thì dgl
+                   # fallback sang setuptools.extern.packaging — đã bị gỡ khỏi
+                   # setuptools đời mới -> `import dgl` chết. Repo không import
+                   # trực tiếp nên rất dễ bỏ sót.
 
 # Dưới đây Kaggle đã cài sẵn, liệt kê để biết code phụ thuộc gì:
 torch              # train/eval

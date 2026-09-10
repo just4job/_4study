@@ -26,3 +26,7 @@ fair-esm           # 5_build_seq_feature (ESM-2)
 #   pip install dgl -f https://data.dgl.ai/wheels/repo.html
 # Bản cài phải khớp torch đang dùng; check_env.py mục 3 kiểm tra điều này.
 dgl>=1.1.2         # 4_build_ppi_graph, 3_build_graph_dataset
+packaging          # dgl import nó trong dgl/utils/__init__.py; thiếu thì dgl
+                   # fallback sang setuptools.extern.packaging — đã bị gỡ khỏi
+                   # setuptools đời mới -> `import dgl` chết. Repo không import
+                   # trực tiếp nên rất dễ bỏ sót.
