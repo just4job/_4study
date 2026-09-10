@@ -1,0 +1,21 @@
+# Kaggle — train + eval. Hầu hết đã có sẵn trong image của Kaggle;
+# thực tế chỉ cần cài thêm dgl.
+#
+# Kiểm tra:  python scripts/check_env.py --target kaggle
+#
+#   !pip install dgl==2.1.0 -f https://data.dgl.ai/wheels/torch-2.1/cu121/repo.html
+#
+# Nếu Kaggle đổi bản torch, thay 'torch-2.1/cu121' cho khớp torch.__version__
+# và torch.version.cuda, rồi chạy lại check_env.py để xác nhận dgl khớp torch
+# (import được KHÔNG có nghĩa là dùng được).
+
+dgl>=1.1.2         # PHẢI tự cài — Kaggle không có sẵn
+
+# Dưới đây Kaggle đã cài sẵn, liệt kê để biết code phụ thuộc gì:
+torch              # train/eval
+numpy
+scikit-learn       # model/evaluation.py — f1 / precision / recall
+transformers       # get_cosine_schedule_with_warmup (train_Struct2GO2)
+tqdm
+pandas             # eval_Struct2GO2 xuất kết quả
+matplotlib         # eval_Struct2GO2 vẽ biểu đồ

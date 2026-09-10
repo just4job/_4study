@@ -1,20 +1,12 @@
-biopython 
-scipy 
-numpy
-torch
-torchvision
-pandas
-networkx    
-tqdm
-# Local Windows: dgl==1.1.2 (CPU). Kaggle T4: dgl==2.1.0+cu118
-dgl>=1.1.2
+# File này giữ lại cho tương thích — nó trỏ sang bộ requirements của MÁY LOCAL
+# (tiền xử lý dữ liệu). Train chạy trên Kaggle, dùng bộ khác.
+#
+#   Máy local (tiền xử lý):  pip install -r requirements-local.txt
+#   Kaggle   (train/eval) :  pip install -r requirements-kaggle.txt
+#   Kiểm tra môi trường   :  python scripts/check_env.py
+#
+# Lưu ý: environment.yml trong repo là env CŨ của Struct2GO gốc
+# (Python 3.7 + tensorflow + allennlp) — KHÔNG dùng được với code hiện tại,
+# vốn cần Python >= 3.10. Đừng `conda env create -f environment.yml`.
 
-node2vec 
-networkx
-allenlp
-fair-esm
-packaging
-scikit-learn 
-transformers
-matplotlib
-
+-r requirements-local.txt
