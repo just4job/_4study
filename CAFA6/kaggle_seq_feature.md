@@ -107,13 +107,21 @@ mất công.
 |---|---|---|
 | `ESM_MODEL_NAME` | `esm2_t30_150M_UR50D` | 150M tham số, dim 640 |
 | `TARGET_DIM` | 1024 | Chiếu tuyến tính 640 → 1024 |
-| `MAX_SEQ_LEN` | 2000 | **Protein dài hơn bị BỎ HẲN** |
+| `MAX_SEQ_LEN` | 5000 | **Protein dài hơn bị BỎ HẲN** (36/20.550 = 0,18%) |
 | `BATCH_SIZE` | 1 | An toàn VRAM |
 
 `MAX_SEQ_LEN` đáng lưu ý: protein bị bỏ sẽ không có trong output, và
 `3_build_graph_dataset.py` lặng lẽ thay bằng zero vector cho toàn bộ nhánh sequence
-của protein đó — không báo lỗi. Chạy `python scripts/check_inputs.py` ở local trước
-để biết con số bị mất là bao nhiêu; dưới 2% thì bỏ qua được.
+của protein đó — không báo lỗi.
+
+Ngưỡng 5000 chọn theo phân bố thật của proteome người: 2000 bỏ 465 protein (2,3%),
+5000 chỉ còn 36 (0,18%). Nâng cao hơn lãi rất ít (8000 thêm 30 protein) trong khi
+attention là O(L²) nên dễ OOM — chuỗi dài nhất là 34.350 residue (titin). Protein
+nào vẫn OOM thì `except RuntimeError` bắt riêng, `empty_cache()` rồi chạy tiếp,
+không làm hỏng cả job.
+
+`python scripts/check_inputs.py` ở local in ra con số thật — nó đọc `MAX_SEQ_LEN`
+thẳng từ script này nên luôn khớp.
 
 ---
 

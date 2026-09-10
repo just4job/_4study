@@ -55,7 +55,10 @@ CKPT_PATH    = _PROC / "dict_sequence_feature.ckpt"
 ESM_MODEL_NAME = "esm2_t30_150M_UR50D"
 
 TARGET_DIM   = 1024    # Dimension output cuối cùng (dùng linear layer)
-MAX_SEQ_LEN  = 2000    # Bỏ qua sequence dài hơn mức này (tránh OOM)
+MAX_SEQ_LEN  = 5000    # Bỏ qua sequence dài hơn mức này (tránh OOM).
+                       # 2000 bỏ 465/20.550 protein người (2,3%); 5000 chỉ còn 36
+                       # (0,18%) — attention là O(L^2) nên cao hơn nữa dễ OOM cả trên
+                       # T4 16GB. Protein nào vẫn OOM đã có nhánh except bắt riêng.
 BATCH_SIZE   = 1       # Mỗi lần encode 1 protein (an toàn cho RAM)
 SAVE_EVERY   = 200     # Lưu checkpoint mỗi N protein
 # ──────────────────────────────────────────────────────────────────────────────

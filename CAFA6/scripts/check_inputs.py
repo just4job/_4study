@@ -27,6 +27,7 @@ import gzip
 import json
 import os
 import pickle
+import re
 import sys
 import time
 from pathlib import Path
@@ -35,8 +36,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check_env import FAIL, INFO, OK, WARN, Report, section  # noqa: E402
 
 BRANCHES = ("BP", "MF", "CC")
-# Phải khớp MAX_SEQ_LEN trong data_processing/5_build_seq_feature.py.
-MAX_SEQ_LEN = 2000
+
+
+def _read_max_seq_len(default: int = 5000) -> int:
+    """Đọc MAX_SEQ_LEN THẲNG TỪ 5_build_seq_feature.py thay vì chép lại.
+
+    Chép cứng thì sửa 1 nơi quên nơi kia, và cảnh báo ở đây sẽ nói sai số protein
+    bị bỏ. Dùng regex vì file đó import torch/esm — không import được ở môi trường
+    chỉ chạy kiểm tra.
+    """
+    src = Path(__file__).resolve().parents[1] / "data_processing" / "5_build_seq_feature.py"
+    try:
+        m = re.search(r"^MAX_SEQ_LEN\s*=\s*(\d+)", src.read_text(encoding="utf-8"), re.M)
+        return int(m.group(1)) if m else default
+    except OSError:
+        return default
+
+
+MAX_SEQ_LEN = _read_max_seq_len()
 
 
 def _pct(part: int, whole: int) -> str:
