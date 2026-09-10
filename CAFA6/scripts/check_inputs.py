@@ -35,6 +35,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check_env import FAIL, INFO, OK, WARN, Report, section  # noqa: E402
 
 BRANCHES = ("BP", "MF", "CC")
+# Phải khớp MAX_SEQ_LEN trong data_processing/5_build_seq_feature.py.
+MAX_SEQ_LEN = 2000
 
 
 def _pct(part: int, whole: int) -> str:
@@ -345,7 +347,7 @@ def cross_check(
     rep: Report,
     struct_ids: set[str],
     valid_ids: set[str],
-    fasta_ids: set[str],
+    fasta_len: dict[str, int],
     acs: dict[str, dict],
     mapping: dict[str, str],
     ppi_ensps: set[str],
@@ -370,6 +372,7 @@ def cross_check(
     else:
         rep.add(OK, "valid_protein_ids.csv khớp đúng proteins_edges/")
 
+    fasta_ids = set(fasta_len)
     if fasta_ids:
         hit = len(struct_ids & fasta_ids)
         rep.add(
@@ -380,6 +383,21 @@ def cross_check(
             "Phủ thấp -> dict_sequence_feature sẽ thiếu, và 3_build_graph_dataset.py\n"
             "lặng lẽ dùng ZERO VECTOR cho nhánh sequence. Kiểm tra FASTA có đúng\n"
             "proteome UP000005640 và header dạng sp|ID|NAME không.",
+        )
+
+    # 5_build_seq_feature.py có MAX_SEQ_LEN = 2000 và BỎ HẲN protein dài hơn —
+    # chúng sẽ không có trong dict_sequence_feature, và 3_build_graph_dataset.py
+    # lặng lẽ thay bằng zero vector cho TOÀN BỘ nhánh sequence của protein đó.
+    # Biết con số này trước khi chạy ESM-2 (hàng chục phút trên GPU) thì hơn.
+    if fasta_len:
+        too_long = [p for p in struct_ids if fasta_len.get(p, 0) > MAX_SEQ_LEN]
+        rep.add(
+            OK if len(too_long) < 0.02 * len(struct_ids) else WARN,
+            f"Dài hơn MAX_SEQ_LEN={MAX_SEQ_LEN}: {len(too_long):,}/{len(struct_ids):,} protein "
+            f"({_pct(len(too_long), len(struct_ids))})",
+            f"5_build_seq_feature.py bỏ qua chúng -> zero vector cho cả nhánh sequence.\n"
+            f"Muốn giữ thì sửa MAX_SEQ_LEN trong script đó (tốn VRAM hơn)."
+            if too_long else "",
         )
 
     for ns, data in acs.items():
@@ -481,7 +499,7 @@ def main() -> int:
     seqfeat_ids = read_pickle_keys(rep, proc / "dict_sequence_feature", "5_build_seq_feature.py")
 
     cross_check(
-        rep, struct_ids, valid_ids, set(fasta_len), acs, mapping, ppi_ensps,
+        rep, struct_ids, valid_ids, fasta_len, acs, mapping, ppi_ensps,
         node2vec_ids, onehot_ids, seqfeat_ids,
     )
     if gaf_ids and acs:
