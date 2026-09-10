@@ -27,10 +27,17 @@ Dataset** → đặt tên ví dụ `cafa6-seq-input`.
 
 ---
 
-## Bước 1 — Bật GPU
+## Bước 1 — Bật GPU **và Internet**
 
-Notebook → **Settings** → *Accelerator* = **GPU T4 x2** (hoặc P100).
-Không bật GPU thì script vẫn chạy nhưng bằng CPU, rất chậm.
+Trong notebook, mở panel bên phải (biểu tượng `<` ở góc phải nếu đang ẩn):
+
+- **Accelerator** = `GPU T4 x2` (hoặc P100). Không bật thì chạy bằng CPU, rất chậm.
+- **Internet** = `On`. Cell 1 phải `git clone` và `pip install fair-esm`; tắt Internet
+  thì cả hai lệnh đó đều lỗi.
+
+Cả hai tuỳ chọn đòi tài khoản Kaggle đã **xác minh số điện thoại**
+(Settings → Phone Verification). Chưa xác minh thì mục Internet bị khoá mờ và
+Accelerator chỉ có `None`.
 
 ---
 
