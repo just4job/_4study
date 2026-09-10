@@ -163,24 +163,56 @@ def _version_of(mod) -> str:
     return "?"
 
 
+def _installed_version(pip_name: str) -> str | None:
+    """Bản đã cài theo pip metadata — KHÁC với 'import được'."""
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+    except Exception:
+        return None
+    try:
+        return version(pip_name)
+    except PackageNotFoundError:
+        return None
+    except Exception:
+        return None
+
+
 def check_packages(rep: Report, pkgs: list[tuple[str, str, str]], required: bool) -> dict[str, object]:
     loaded: dict[str, object] = {}
-    missing: list[str] = []
+    to_install: list[str] = []
     for mod_name, pip_name, why in pkgs:
         try:
             mod = importlib.import_module(mod_name)
         except Exception as exc:
-            missing.append(pip_name)
-            rep.add(
-                FAIL if required else WARN,
-                f"{pip_name}: THIẾU ({type(exc).__name__})",
-                f"dùng cho: {why}",
-            )
+            dist = _installed_version(pip_name)
+            # Phân biệt 2 tình huống rất khác nhau mà cùng ném ModuleNotFoundError:
+            #   (a) chưa cài  -> pip install là xong
+            #   (b) CÓ cài nhưng import hỏng vì thiếu dependency của chính nó,
+            #       hoặc build không khớp torch/numpy -> pip install lại vô ích.
+            # Thông báo lỗi gốc mới là thứ chỉ đúng chỗ, nên luôn in nguyên văn.
+            if dist is None:
+                to_install.append(pip_name)
+                rep.add(
+                    FAIL if required else WARN,
+                    f"{pip_name}: CHƯA CÀI ({type(exc).__name__}: {exc})",
+                    f"dùng cho: {why}",
+                )
+            else:
+                rep.add(
+                    FAIL if required else WARN,
+                    f"{pip_name} {dist}: ĐÃ CÀI nhưng import HỎNG "
+                    f"({type(exc).__name__}: {exc})",
+                    f"dùng cho: {why}\n"
+                    f"pip install lại KHÔNG sửa được. Xem traceback đầy đủ:\n"
+                    f"    python -c \"import {mod_name}\"\n"
+                    f"Thiếu module khác -> cài module đó. Lỗi symbol/ABI -> bản\n"
+                    f"{pip_name} không khớp torch/numpy đang cài, phải hạ hoặc đổi bản.",
+                )
             continue
         loaded[mod_name] = mod
         print(f"[{OK}] {pip_name} {_version_of(mod)}")
-    if missing:
-        print(f"\n  -> pip install {' '.join(sorted(set(missing)))}")
+    if to_install:
+        print(f"\n  -> pip install {' '.join(sorted(set(to_install)))}")
     return loaded
 
 
