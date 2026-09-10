@@ -44,11 +44,12 @@ import torch
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from data_processing.paths import resolve_data_dir, resolve_raw_dir
 from data_processing.split_utils import build_train_only_ppi_graph, load_split
 
 # ── Cấu hình ─────────────────────────────────────────────────────────────────
-BASE_DIR   = Path("D:/CAFA6")
-RAW_DIR    = Path("D:/raw_data")
+BASE_DIR   = resolve_data_dir()
+RAW_DIR    = resolve_raw_dir()
 PROC_DIR   = BASE_DIR / "proceed_data"
 
 STRING_FILE   = RAW_DIR / "ppi.txt"

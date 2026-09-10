@@ -36,10 +36,16 @@ from Bio import SeqIO
 from tqdm import tqdm
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-FASTA_PATH   = Path("D:/raw_data/seq.fasta")
-VALID_IDS    = Path("D:/CAFA6/proceed_data/valid_protein_ids.csv")
-OUTPUT_PATH  = Path("D:/CAFA6/proceed_data/dict_sequence_feature")
-CKPT_PATH    = Path("D:/CAFA6/proceed_data/dict_sequence_feature.ckpt")
+import sys
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from data_processing.paths import resolve_data_dir, resolve_raw_dir
+
+_PROC = resolve_data_dir() / "proceed_data"
+FASTA_PATH   = resolve_raw_dir() / "seq.fasta"
+VALID_IDS    = _PROC / "valid_protein_ids.csv"
+OUTPUT_PATH  = _PROC / "dict_sequence_feature"
+CKPT_PATH    = _PROC / "dict_sequence_feature.ckpt"
 
 # Chọn model ESM-2:
 #   "esm2_t6_8M_UR50D"     →  dim=320  (nhỏ nhất, nhanh nhất, ~31MB)

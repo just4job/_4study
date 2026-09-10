@@ -27,8 +27,12 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 
-BASE_DIR = Path("D:/CAFA6")
-RAW_DIR = Path("D:/raw_data")
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from data_processing.paths import resolve_data_dir, resolve_raw_dir
+
+BASE_DIR = resolve_data_dir()
+RAW_DIR = resolve_raw_dir()
 PROC_DIR = BASE_DIR / "proceed_data"
 GO_OBO_URLS = [
     "https://current.geneontology.org/ontology/go-basic.obo",

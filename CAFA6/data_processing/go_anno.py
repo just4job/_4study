@@ -13,8 +13,12 @@ import json
 from pathlib import Path
 
 
-BASE_DIR = Path("D:/CAFA6")
-RAW_FILE = Path("D:/raw_data/goa_human.gaf.gz")
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from data_processing.paths import resolve_data_dir, resolve_raw_dir
+
+BASE_DIR = resolve_data_dir()
+RAW_FILE = resolve_raw_dir() / "goa_human.gaf.gz"
 OUT_FILE = BASE_DIR / "proceed_data" / "HUMAN_protein_info.json"
 
 

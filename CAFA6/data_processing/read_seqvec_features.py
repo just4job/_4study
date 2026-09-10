@@ -15,7 +15,12 @@ from pathlib import Path
 
 import numpy as np
 
-BASE_DIR = Path("D:/CAFA6")
+import sys
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from data_processing.paths import resolve_data_dir
+
+BASE_DIR = resolve_data_dir()
 PROC_DIR = BASE_DIR / "proceed_data"
 
 EMB_PATH = PROC_DIR / "9606-avg-emb.pkl"

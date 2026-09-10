@@ -2,8 +2,13 @@ import os
 from pathlib import Path
 import pandas as pd
 
-BASE_DIR = Path("D:/CAFA6")
-STRUCT_DIR = Path("D:/raw_data/struct_feature")
+import sys
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from data_processing.paths import resolve_data_dir, resolve_raw_dir
+
+BASE_DIR = resolve_data_dir()
+STRUCT_DIR = resolve_raw_dir() / "struct_feature"
 PROCEED_DIR = BASE_DIR / "proceed_data"
 
 PROCEED_DIR.mkdir(parents=True, exist_ok=True)

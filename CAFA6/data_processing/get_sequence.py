@@ -1,4 +1,5 @@
 import gzip
+import sys
 import warnings
 import numpy as np
 import pandas as pd
@@ -7,6 +8,10 @@ import os
 import pickle
 from pathlib import Path
 from tqdm import tqdm
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from data_processing.paths import resolve_data_dir, resolve_raw_dir
 
 warnings.filterwarnings("ignore", category=BiopythonParserWarning)
 
@@ -49,10 +54,10 @@ def seq2onehot(seq):
     return seqs_x
 
 
-BASE_DIR = Path(__file__).resolve().parents[1]
+BASE_DIR = resolve_data_dir()
 PROC_DIR = BASE_DIR / "proceed_data"
 
-STRUCT_DIR = Path("D:/raw_data/struct_feature")
+STRUCT_DIR = resolve_raw_dir() / "struct_feature"
 VALID_IDS_CSV = PROC_DIR / "valid_protein_ids.csv"
 OUT_ONEHOT = PROC_DIR / "protein_node2onehot"
 OUT_SEQ = PROC_DIR / "protein_sequence"

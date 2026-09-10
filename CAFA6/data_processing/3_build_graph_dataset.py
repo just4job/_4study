@@ -52,12 +52,13 @@ from tqdm import tqdm
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from data_processing.paths import resolve_data_dir
 from data_processing.split_utils import load_split, load_vocab
 
 warnings.filterwarnings("ignore")
 
 # ── Cấu hình đường dẫn ────────────────────────────────────────────────────────
-BASE_DIR    = Path("D:/CAFA6")
+BASE_DIR    = resolve_data_dir()
 PROC_DIR    = BASE_DIR / "proceed_data"
 EDGES_DIR   = PROC_DIR / "proteins_edges"
 

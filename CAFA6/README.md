@@ -29,6 +29,34 @@ Mô hình dự đoán chức năng protein (Gene Ontology) kết hợp **3 ngu�
 
 ## 1. Cấu trúc thư mục và dữ liệu
 
+### Đường dẫn: `DATA_DIR` và `RAW_DIR`
+
+Tài liệu này viết theo máy Windows gốc (`D:\CAFA6`, `D:\raw_data`), nhưng **script
+không còn hardcode 2 đường dẫn đó**. `data_processing/paths.py` giải quyết theo thứ tự:
+
+1. Biến môi trường `DATA_DIR` / `RAW_DIR`
+2. Thư mục repo (`<repo>/proceed_data`, `<repo>/../raw_data`)
+3. Thư mục làm việc hiện tại
+4. `D:/CAFA6`, `D:/raw_data` — **chỉ khi đang chạy Windows**
+
+Nên trên Linux/macOS/Kaggle, để repo cạnh `raw_data/` là chạy được luôn:
+
+```
+_4study/
+├── CAFA6/            ← repo (chính là DATA_DIR: chứa proceed_data/, divided_data/)
+└── raw_data/         ← RAW_DIR: ppi.txt, seq.fasta, goa_human.gaf.gz, struct_feature/
+```
+
+Đặt khác chỗ thì khai báo rõ:
+
+```bash
+export DATA_DIR=/duong/dan/CAFA6
+export RAW_DIR=/duong/dan/raw_data
+```
+
+Kiểm tra script đang trỏ vào đâu: `python scripts/check_env.py` (mục 4 in ra
+`raw_dir` và `data_dir` thật sự đang dùng).
+
 ### Dữ liệu thô (cần có sẵn trước khi chạy)
 
 ```
