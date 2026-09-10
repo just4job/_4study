@@ -18,9 +18,14 @@ Chỉ cần upload 2 file nhỏ, KHÔNG cần upload `proteins_edges/` hay bất
 
 ```bash
 cd ~/Downloads/_4study
-mkdir -p /tmp/cafa6_seq_input
-cp raw_data/seq.fasta CAFA6/proceed_data/valid_protein_ids.csv /tmp/cafa6_seq_input/
+mkdir -p ~/cafa6_seq_input
+cp raw_data/seq.fasta CAFA6/proceed_data/valid_protein_ids.csv ~/cafa6_seq_input/
+ls -lh ~/cafa6_seq_input
 ```
+
+Đặt trong `$HOME` chứ KHÔNG phải `/tmp`: trình duyệt cài bằng snap hoặc flatpak
+(mặc định của Firefox/Chromium trên Ubuntu) chạy trong namespace riêng và thấy một
+`/tmp` khác, nên hộp chọn file của nó không tìm ra thư mục vừa tạo.
 
 Upload thư mục đó lên [Kaggle Datasets](https://www.kaggle.com/datasets) → **New
 Dataset** → đặt tên ví dụ `cafa6-seq-input`.

@@ -39,14 +39,17 @@ git pull
 **A2.** Đóng gói input:
 
 ```bash
-mkdir -p /tmp/cafa6_seq_input
-cp ~/Downloads/_4study/raw_data/seq.fasta proceed_data/valid_protein_ids.csv /tmp/cafa6_seq_input/
-ls -la /tmp/cafa6_seq_input
+mkdir -p ~/cafa6_seq_input
+cp ~/Downloads/_4study/raw_data/seq.fasta proceed_data/valid_protein_ids.csv ~/cafa6_seq_input/
+ls -lh ~/cafa6_seq_input
 ```
 
-Chờ: `seq.fasta` ~70 MB, `valid_protein_ids.csv` ~143 KB.
+Chờ: `seq.fasta` ~83 MB, `valid_protein_ids.csv` ~143 KB.
 
-**A3.** Upload `/tmp/cafa6_seq_input` lên [Kaggle Datasets](https://www.kaggle.com/datasets)
+Dùng `$HOME` chứ không phải `/tmp` — trình duyệt snap/flatpak có `/tmp` riêng nên
+hộp chọn file của nó không thấy thư mục nằm trong `/tmp` thật.
+
+**A3.** Upload `~/cafa6_seq_input` lên [Kaggle Datasets](https://www.kaggle.com/datasets)
 → **New Dataset** → tên `cafa6-seq-input`.
 
 **A4.** Notebook mới → **Settings → Accelerator → GPU T4 x2** → **Add Input** chọn
