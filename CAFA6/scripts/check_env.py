@@ -210,8 +210,10 @@ def check_packages(rep: Report, pkgs: list[tuple[str, str, str]], required: bool
                     f"Thiếu module khác -> cài module đó. Lỗi symbol/ABI -> bản\n"
                     f"{pip_name} không khớp torch/numpy đang cài, phải hạ hoặc đổi bản."
                     + (
-                        "\nVới dgl, thủ phạm hay gặp nhất là thiếu `packaging`:"
-                        "\n    pip install packaging"
+                        "\nVới dgl, 2 thủ phạm hay gặp nhất (đều không phải lỗi bản dgl):"
+                        "\n  packaging thiếu            -> pip install packaging"
+                        "\n  torchdata.datapipes thiếu  -> pip install --no-deps 'torchdata==0.9.0'"
+                        "\n                                (torchdata >= 0.10 đã bỏ datapipes)"
                         if mod_name == "dgl"
                         else ""
                     ),
@@ -425,16 +427,16 @@ def print_install_help(target: str) -> None:
         "  # chỉ khi rebuild protein_node2vec từ ppi.txt mới:\n"
         "  pip install networkx node2vec\n"
     )
-    v = sys.version_info
-    if v[:2] >= (3, 12):
-        print(
-            f"  # dgl: Python {v.major}.{v.minor} CHỈ có wheel từ dgl >= 2.2.1 trở lên\n"
-            "  #   (bản 2.1.0 và cũ hơn không có cp312 -> pip báo 'no matching distribution')\n"
-            "  pip install dgl -f https://data.dgl.ai/wheels/repo.html\n"
-            "  # Không tìm được wheel thì tạo env Python 3.11 thay vì build dgl từ nguồn.\n"
-        )
-    else:
-        print("  pip install dgl -f https://data.dgl.ai/wheels/repo.html\n")
+    print(
+        "  pip install dgl -f https://data.dgl.ai/wheels/repo.html\n"
+        "  # dgl kéo theo 2 bẫy, cả hai đều KHÔNG phải lỗi bản dgl:\n"
+        "  #  1) thiếu `packaging`      -> pip install packaging\n"
+        "  #  2) torchdata >= 0.10 đã bỏ hẳn torchdata.datapipes mà dgl 2.x import\n"
+        "  #     -> pip install --no-deps 'torchdata==0.9.0'\n"
+        "  #        (hoặc: python scripts/kaggle_fix_dgl.py --no-install, script này\n"
+        "  #         viết lại import trong dgl sang torch.utils.data.datapipes)\n"
+        "  # Pip không tìm được wheel nào -> tạo env Python 3.11, đừng build từ nguồn.\n"
+    )
     print(
         "Cài xong chạy lại script này — mục 3 sẽ kiểm tra dgl có khớp torch không\n"
         "(import được KHÔNG có nghĩa là dùng được)."
