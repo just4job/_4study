@@ -411,20 +411,36 @@ def cross_check(
                 "MỚI hơn lúc tạo mapping, chạy lại 3_uniprot_mapping.py.",
             )
 
-    for name, ids, need in (
-        ("protein_node2vec", node2vec_ids, "node feature 30 chiều"),
-        ("protein_node2onehot", onehot_ids, "node feature 26 chiều"),
-        ("dict_sequence_feature", seqfeat_ids, "toàn bộ nhánh sequence"),
+    # protein_node2vec KHÁC 2 cái kia: nó chỉ dựng được cho protein CÓ MẶT trong
+    # đồ thị PPI (score >= 700). Protein không có tương tác tin cậy nào thì không
+    # có embedding — đó là bản chất dữ liệu, không phải lỗi build. Nên ngưỡng thấp
+    # hơn và chỉ WARN. onehot/seqfeat thì dựng từ chuỗi nên PHẢI phủ gần hết.
+    for name, ids, need, floor, sev in (
+        ("protein_node2vec", node2vec_ids, "node feature 30 chiều", 0.5, WARN),
+        ("protein_node2onehot", onehot_ids, "node feature 26 chiều", 0.9, FAIL),
+        ("dict_sequence_feature", seqfeat_ids, "toàn bộ nhánh sequence", 0.9, FAIL),
     ):
         if ids is None:
             continue
         hit = len(struct_ids & ids)
+        good = hit >= floor * len(struct_ids)
+        if name == "protein_node2vec":
+            detail = (
+                f"{len(struct_ids) - hit:,} protein còn lại không có cạnh PPI nào đạt "
+                "score >= 700\n"
+                f"nên nhận zero vector cho {need}. Bình thường với dữ liệu STRING."
+            )
+            if not good:
+                detail += "\nDưới 50% thì nên xem lại mapping hoặc ngưỡng --min-score."
+        else:
+            detail = "" if good else (
+                f"Protein không được phủ sẽ nhận ZERO VECTOR cho {need} — "
+                "không có lỗi nào được in ra lúc build."
+            )
         rep.add(
-            OK if hit >= 0.9 * len(struct_ids) else FAIL,
+            OK if good else sev,
             f"{name} phủ {hit:,}/{len(struct_ids):,} protein ({_pct(hit, len(struct_ids))})",
-            "" if hit >= 0.9 * len(struct_ids) else
-            f"Protein không được phủ sẽ nhận ZERO VECTOR cho {need} — "
-            "không có lỗi nào được in ra lúc build.",
+            detail,
         )
 
 
