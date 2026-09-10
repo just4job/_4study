@@ -27,6 +27,10 @@ Mô hình dự đoán chức năng protein (Gene Ontology) kết hợp **3 ngu�
 
 ---
 
+> **Chỉ muốn biết chạy cái gì, theo thứ tự nào?** → [RUNBOOK.md](RUNBOOK.md).
+> File README này giải thích *vì sao*; RUNBOOK là thứ tự thao tác kèm output mong đợi
+> ở từng bước.
+
 ## 1. Cấu trúc thư mục và dữ liệu
 
 ### Đường dẫn: `DATA_DIR` và `RAW_DIR`
