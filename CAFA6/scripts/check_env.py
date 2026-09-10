@@ -10,7 +10,7 @@ import mọi thứ trong try/except để không chết giữa chừng.
 
 Cách chạy:
     python scripts/check_env.py
-    python scripts/check_env.py --target local --raw-dir D:/raw_data --data-dir D:/CAFA6
+    python scripts/check_env.py --target local --raw-dir ~/raw_data --data-dir ~/CAFA6
     python scripts/check_env.py --target kaggle
 
 Exit code: 0 = chạy được, 1 = có FAIL phải sửa.
@@ -65,21 +65,34 @@ RAW_ITEMS = [
     ("goa_human.gaf.gz", "GO annotation", "go_anno.py"),
     ("seq.fasta", "FASTA protein người", "5_build_seq_feature"),
 ]
-# Sản phẩm trung gian — (tên trong proceed_data, script sinh ra nó)
+# Sản phẩm trung gian — (tên trong proceed_data, script sinh ra nó, bytes tối thiểu
+# hợp lý). Ngưỡng để bắt file RỖNG/HỎNG: `pickle.dump({})` chỉ ra 5 byte và vẫn
+# load được, nên "file tồn tại" không chứng minh được gì — phải xem cả kích thước.
 PROC_ITEMS = [
-    ("valid_protein_ids.csv", "1_get_valid_ids.py"),
-    ("proteins_edges", "2_extract_struct_map.py"),
-    ("protein_node2onehot", "get_sequence.py"),
-    ("protein_node2vec", "4_build_ppi_node2vec.py"),
-    ("HUMAN_protein_info.json", "go_anno.py"),
-    ("human_BP_ACS.json", "2_build_go_namespace.py"),
-    ("human_MF_ACS.json", "2_build_go_namespace.py"),
-    ("human_CC_ACS.json", "2_build_go_namespace.py"),
-    ("dict_sequence_feature", "5_build_seq_feature.py"),
-    ("uniprot_ensembl_mapping.csv", "3_uniprot_mapping.py"),
-    ("ppi_graph_global", "4_build_ppi_graph.py"),
-    ("ppi_protein_index", "4_build_ppi_graph.py"),
+    ("valid_protein_ids.csv", "1_get_valid_ids.py", 10_000),
+    ("proteins_edges", "2_extract_struct_map.py", 0),
+    ("protein_node2onehot", "get_sequence.py", 1_000_000),
+    ("protein_node2vec", "4_build_ppi_node2vec.py", 100_000),
+    ("HUMAN_protein_info.json", "go_anno.py", 100_000),
+    ("human_BP_ACS.json", "2_build_go_namespace.py", 100_000),
+    ("human_MF_ACS.json", "2_build_go_namespace.py", 100_000),
+    ("human_CC_ACS.json", "2_build_go_namespace.py", 100_000),
+    ("dict_sequence_feature", "5_build_seq_feature.py", 10_000_000),
+    ("uniprot_ensembl_mapping.csv", "3_uniprot_mapping.py", 10_000),
+    ("ppi_graph_global", "4_build_ppi_graph.py", 1_000_000),
+    ("ppi_protein_index", "4_build_ppi_graph.py", 100_000),
 ]
+
+# Pickle của container RỖNG — dấu hiệu script sinh ra file nhưng không ghi được
+# dữ liệu nào (vd. chạy sai đường dẫn input rồi vẫn dump ở cuối).
+EMPTY_PICKLES = {
+    b"\x80\x04}\x94.": "dict rỗng {}",
+    b"\x80\x05}\x94.": "dict rỗng {}",
+    b"\x80\x02}q\x00.": "dict rỗng {}",
+    b"\x80\x03}q\x00.": "dict rỗng {}",
+    b"\x80\x04]\x94.": "list rỗng []",
+    b"\x80\x05]\x94.": "list rỗng []",
+}
 
 OK, WARN, FAIL, INFO = "  OK  ", " WARN ", " FAIL ", " INFO "
 
@@ -233,6 +246,18 @@ def check_torch_dgl(rep: Report, loaded: dict[str, object], want_gpu: bool) -> N
             )
 
 
+def _empty_pickle_kind(path: Path) -> str | None:
+    """Trả về mô tả nếu file là pickle của container rỗng, ngược lại None."""
+    try:
+        if path.stat().st_size > 16:
+            return None
+        with open(path, "rb") as f:
+            head = f.read(16)
+    except Exception:
+        return None
+    return EMPTY_PICKLES.get(head)
+
+
 def _dir_stats(path: Path, pattern: str = "*") -> tuple[int, int]:
     """(số file, tổng bytes) — dừng sớm nếu thư mục quá lớn để không treo."""
     count = 0
@@ -272,13 +297,31 @@ def check_data(rep: Report, raw_dir: Path, data_dir: Path) -> None:
     if not proc.is_dir():
         rep.add(WARN, f"Chưa có {proc} — pipeline chưa chạy bước nào")
     else:
-        for name, made_by in PROC_ITEMS:
+        for name, made_by, min_bytes in PROC_ITEMS:
             p = proc / name
             if p.is_dir():
                 n, sz = _dir_stats(p)
                 rep.add(OK if n else WARN, f"{name}/: {n:,} file ({human(sz)})")
             elif p.is_file():
-                rep.add(OK, f"{name}: {human(p.stat().st_size)}")
+                size = p.stat().st_size
+                empty = _empty_pickle_kind(p)
+                if empty:
+                    rep.add(
+                        FAIL,
+                        f"{name}: {human(size)} — file RỖNG ({empty})",
+                        f"Load được nhưng không có dữ liệu nào bên trong, nên mọi bước\n"
+                        f"dùng nó sẽ âm thầm rơi về zero vector thay vì báo lỗi.\n"
+                        f"Chạy lại {made_by} để sinh lại.",
+                    )
+                elif min_bytes and size < min_bytes:
+                    rep.add(
+                        FAIL,
+                        f"{name}: {human(size)} — nhỏ bất thường (chờ >= {human(min_bytes)})",
+                        f"Nhiều khả năng bị cắt cụt hoặc sinh ra từ input rỗng.\n"
+                        f"Chạy lại {made_by}.",
+                    )
+                else:
+                    rep.add(OK, f"{name}: {human(size)}")
             else:
                 rep.add(WARN, f"{name}: chưa có — sinh ra bởi {made_by}")
 
@@ -331,19 +374,35 @@ def print_install_help(target: str) -> None:
             "— đó là thư viện cho tiền xử lý ở máy local."
         )
         return
+    activate = ".venv\\Scripts\\activate" if os.name == "nt" else "source .venv/bin/activate"
     print(
         "Máy local CHỈ chạy tiền xử lý (không train), nên không cần bản torch CUDA nặng.\n\n"
-        "  python -m venv .venv && .venv\\Scripts\\activate      # Windows\n"
+        f"  python -m venv .venv && {activate}\n"
         "  pip install --upgrade pip\n\n"
         "  # torch CPU là đủ cho tiền xử lý; muốn ESM-2 chạy nhanh thì cài bản CUDA\n"
         "  pip install torch --index-url https://download.pytorch.org/whl/cpu\n"
-        "  pip install dgl -f https://data.dgl.ai/wheels/repo.html\n\n"
         "  pip install biopython scipy numpy pandas tqdm requests fair-esm\n\n"
         "  # chỉ khi rebuild protein_node2vec từ ppi.txt mới:\n"
-        "  pip install networkx node2vec\n\n"
+        "  pip install networkx node2vec\n"
+    )
+    v = sys.version_info
+    if v[:2] >= (3, 12):
+        print(
+            f"  # dgl: Python {v.major}.{v.minor} CHỈ có wheel từ dgl >= 2.2.1 trở lên\n"
+            "  #   (bản 2.1.0 và cũ hơn không có cp312 -> pip báo 'no matching distribution')\n"
+            "  pip install dgl -f https://data.dgl.ai/wheels/repo.html\n"
+            "  # Không tìm được wheel thì tạo env Python 3.11 thay vì build dgl từ nguồn.\n"
+        )
+    else:
+        print("  pip install dgl -f https://data.dgl.ai/wheels/repo.html\n")
+    print(
         "Cài xong chạy lại script này — mục 3 sẽ kiểm tra dgl có khớp torch không\n"
         "(import được KHÔNG có nghĩa là dùng được)."
     )
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
 
 
 def main() -> int:
@@ -355,7 +414,13 @@ def main() -> int:
         "--target", choices=["local", "kaggle", "auto"], default="auto",
         help="local = tiền xử lý dữ liệu; kaggle = train/eval",
     )
-    parser.add_argument("--raw-dir", type=Path, default=Path(os.environ.get("RAW_DIR", "D:/raw_data")))
+    # D:/raw_data là đường dẫn trong docstring của các script (viết trên Windows).
+    # Trên Linux/macOS nó không tồn tại và mọi kiểm tra raw_data sẽ báo THIẾU sai,
+    # nên mặc định đổi sang <data_dir>/../raw_data.
+    default_raw = os.environ.get("RAW_DIR")
+    if not default_raw:
+        default_raw = "D:/raw_data" if os.name == "nt" else str(_repo_root().parent / "raw_data")
+    parser.add_argument("--raw-dir", type=Path, default=Path(default_raw))
     parser.add_argument(
         "--data-dir", type=Path,
         default=Path(os.environ.get("DATA_DIR", Path(__file__).resolve().parents[1])),
