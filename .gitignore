@@ -51,3 +51,7 @@ Desktop.ini
 # Git worktrees
 .claude/worktrees/
 "Antigravity-x64.exe" 
+log/
+save_models/
+slide.pptx
+nguyenthulinh_.8m.xlsx
