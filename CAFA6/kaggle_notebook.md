@@ -142,6 +142,19 @@ việc tải chúng về:
 đã clone lẫn gói đã `pip install` — nên với job train 1–2 giờ, hãy chạy bằng
 **Save Version → Save & Run All (Commit)** thay vì ngồi canh tab (xem Cell 6).
 
+**Cập nhật code mà không clone lại** — clone shallow thì `git pull` KHÔNG chạy
+được (không đủ lịch sử chung, git báo *"divergent branches"*), phải ép con trỏ:
+
+```python
+!cd /kaggle/working/_4study \
+    && git fetch --depth=1 origin claude/cafa6-folder-summary-8j9xch \
+    && git reset --hard FETCH_HEAD
+```
+
+An toàn vì bản clone trên Kaggle không có thay đổi cục bộ, và `reset` giữ nguyên
+cấu hình sparse-checkout. Nếu đã `import` module cũ trước đó thì nhớ
+`importlib.reload(...)` — Python nhớ kết quả import cũ, kể cả lần import hỏng.
+
 ---
 
 ## Cell 2 — Cài thư viện + DGL CUDA
