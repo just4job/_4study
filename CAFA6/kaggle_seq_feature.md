@@ -105,13 +105,37 @@ if torch.cuda.is_available():
 
 ## Cell 4 — Chạy ESM-2
 
+Ô này TỰ CHỨA: chạy lại được sau khi session bị ngắt mà không cần chạy lại ô nào
+khác. Ngắt session làm mất cả gói pip đã cài lẫn biến trong bộ nhớ notebook, nên
+ô này dựng lại hết trước khi gọi script.
+
 ```python
-!cd {REPO} && python data_processing/5_build_seq_feature.py
+import glob, os, shutil
+
+REPO = "/kaggle/working/_4study/CAFA6"
+
+if not os.path.isdir(REPO):
+    !git clone -b claude/cafa6-folder-summary-8j9xch https://github.com/just4job/_4study.git /kaggle/working/_4study
+!pip install -q fair-esm
+
+hits = glob.glob("/kaggle/input/**/seq.fasta", recursive=True)
+assert hits, "Không thấy seq.fasta — dataset chưa gắn"
+os.environ["DATA_DIR"] = REPO
+os.environ["RAW_DIR"] = os.path.dirname(hits[0])
+os.makedirs(f"{REPO}/proceed_data", exist_ok=True)
+shutil.copy(f"{os.environ['RAW_DIR']}/valid_protein_ids.csv", f"{REPO}/proceed_data/")
+
+!cd /kaggle/working/_4study/CAFA6 && python data_processing/5_build_seq_feature.py
 ```
 
-Script tự lưu checkpoint mỗi 200 protein vào `dict_sequence_feature.ckpt`, nên
-notebook bị ngắt giữa chừng thì chạy lại cell này là tiếp tục từ chỗ dừng, không
-mất công.
+Dòng cuối viết thẳng đường dẫn, KHÔNG dùng `!cd {REPO}`: cú pháp `{...}` lấy giá
+trị từ bộ nhớ notebook, nên sau khi session ngắt nó truyền nguyên chuỗi `{REPO}`
+cho bash và báo `cd: {REPO}: No such file or directory`. `os.environ` cũng được
+set lại ngay trong cùng ô để tiến trình `python` con nhận đúng `DATA_DIR`/`RAW_DIR`.
+
+Script lưu checkpoint mỗi 200 protein vào `dict_sequence_feature.ckpt` trong
+`/kaggle/working` — thư mục này sống sót qua restart, nên chạy lại ô là tiếp tục
+từ chỗ dừng.
 
 **Cấu hình mặc định** (sửa ở đầu `5_build_seq_feature.py` nếu cần):
 
@@ -141,7 +165,7 @@ thẳng từ script này nên luôn khớp.
 
 ```python
 import pickle, os
-p = f"{REPO}/proceed_data/dict_sequence_feature"
+p = "/kaggle/working/_4study/CAFA6/proceed_data/dict_sequence_feature"
 with open(p, "rb") as f:
     d = pickle.load(f)
 print(f"{len(d):,} protein, {os.path.getsize(p)/1e6:.0f} MB")
@@ -157,7 +181,7 @@ Bấm **Output** ở panel bên phải → tải `dict_sequence_feature` về, c
 Xoá file checkpoint cho gọn (không cần giữ):
 
 ```python
-!rm -f {REPO}/proceed_data/dict_sequence_feature.ckpt
+!rm -f /kaggle/working/_4study/CAFA6/proceed_data/dict_sequence_feature.ckpt
 ```
 
 ---
