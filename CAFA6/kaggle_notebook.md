@@ -20,7 +20,7 @@ Pipeline đã đổi (thêm Bước 2b, sửa vocab + PPI leakage guard — xem
   local** rồi pack lại:
 
 ```bash
-# Trên máy local (D:\CAFA6)
+# Trên máy local, trong thư mục CAFA6
 python data_processing/split_protein_ids.py --force        # Bước 2b (mới)
 python data_processing/4_build_ppi_graph.py                # -> ppi_graph_train_{ns}
 python data_processing/3_build_graph_dataset.py            # -> label_vocab/label_network chỉ từ train
@@ -54,10 +54,10 @@ proceed_data/human_{MF,CC,BP}_ACS.json
 Không phải build lại từ đầu. Chạy migrate ngay trên Kaggle (~vài phút):
 
 ```python
-%env DATA_DIR=/kaggle/working/CAFA6
+%env DATA_DIR=/kaggle/working/_4study/CAFA6
 # --materialize: proceed_data đang là symlink tới /kaggle/input (read-only)
-!python /kaggle/working/CAFA6/scripts/migrate_old_data.py --materialize
-!python /kaggle/working/CAFA6/scripts/audit_data.py
+!python /kaggle/working/_4study/CAFA6/scripts/migrate_old_data.py --materialize
+!python /kaggle/working/_4study/CAFA6/scripts/audit_data.py
 ```
 
 Script suy ra `split_{ns}.json` **từ chính `divided_data` đang có** (giữ nguyên
@@ -71,13 +71,13 @@ Mặc định script sửa 2 trong 3 vấn đề: PPI leak (guard build-time) v�
 `raw_data` — chỉ cần chính bản pack):
 
 ```python
-%env DATA_DIR=/kaggle/working/CAFA6
+%env DATA_DIR=/kaggle/working/_4study/CAFA6
 # Xem trước vocab mới còn bao nhiêu nhãn, chưa ghi gì:
-!python /kaggle/working/CAFA6/scripts/migrate_old_data.py --relabel --dry-run
+!python /kaggle/working/_4study/CAFA6/scripts/migrate_old_data.py --relabel --dry-run
 
 # Chạy thật (ghi đè ds.label của divided_data theo vocab mới):
-!python /kaggle/working/CAFA6/scripts/migrate_old_data.py --materialize --relabel
-!python /kaggle/working/CAFA6/scripts/audit_data.py
+!python /kaggle/working/_4study/CAFA6/scripts/migrate_old_data.py --materialize --relabel
+!python /kaggle/working/_4study/CAFA6/scripts/audit_data.py
 ```
 
 Vector nhãn chỉ phụ thuộc `human_{NS}_ACS.json` + vocab (đều có trong bản pack),
@@ -110,13 +110,18 @@ Lưu ý khi chạy `--relabel` trên Kaggle:
 ## Cell 1 — Clone repo
 
 ```python
-%cd /kaggle/working
-!rm -rf CAFA6
-!git clone https://github.com/PNTLinh/CAFA6.git
-%cd CAFA6
+!rm -rf /kaggle/working/_4study
+!git clone -b claude/cafa6-folder-summary-8j9xch \
+    https://github.com/just4job/_4study.git /kaggle/working/_4study
+!ls /kaggle/working/_4study/CAFA6
 ```
 
-*(Đã clone rồi, chỉ cập nhật code: `%cd /kaggle/working/CAFA6` rồi `!git pull`)*
+`rm -rf` trước khi clone: nếu lần chạy trước clone dở dang, thư mục đã tồn tại và
+`git clone` báo *"already exists and is not an empty directory"*.
+
+`/kaggle/working` **chỉ sống trong một session**. Session kết thúc là mất cả repo
+đã clone lẫn gói đã `pip install` — nên với job train 1–2 giờ, hãy chạy bằng
+**Save Version → Save & Run All (Commit)** thay vì ngồi canh tab (xem Cell 6).
 
 ---
 
@@ -125,7 +130,7 @@ Lưu ý khi chạy `--relabel` trên Kaggle:
 ```python
 !pip install -q "numpy>=1.26,<2.4" "scipy>=1.11,<1.16"
 !pip install -q packaging fair-esm transformers biopython tqdm scikit-learn pandas networkx requests psutil
-!python /kaggle/working/CAFA6/scripts/kaggle_fix_dgl.py
+!python /kaggle/working/_4study/CAFA6/scripts/kaggle_fix_dgl.py
 ```
 
 ---
@@ -147,13 +152,13 @@ print("OK", torch.__version__, dgl.__version__, g.device)
 ## Cell 4 — Nối dữ liệu từ /kaggle/input
 
 ```python
-!python /kaggle/working/CAFA6/scripts/kaggle_link_data.py
+!python /kaggle/working/_4study/CAFA6/scripts/kaggle_link_data.py
 ```
 
 Chỉ dùng 1 nhánh cho nhanh (bỏ validate pickle nặng của nhánh khác):
 
 ```python
-!python /kaggle/working/CAFA6/scripts/kaggle_link_data.py --branches cc
+!python /kaggle/working/_4study/CAFA6/scripts/kaggle_link_data.py --branches cc
 ```
 
 ---
@@ -164,8 +169,8 @@ Chạy trước train/eval: khoá `DATA_DIR` (tránh notebook cũ quay về `D:/
 audit toàn bộ dữ liệu đã chuẩn bị.
 
 ```python
-%env DATA_DIR=/kaggle/working/CAFA6
-!python /kaggle/working/CAFA6/scripts/audit_data.py
+%env DATA_DIR=/kaggle/working/_4study/CAFA6
+!python /kaggle/working/_4study/CAFA6/scripts/audit_data.py
 ```
 
 `scripts/audit_data.py` kiểm tra 6 nhóm (exit code 1 nếu có `FAIL`):
@@ -186,7 +191,7 @@ audit toàn bộ dữ liệu đã chuẩn bị.
 Đối chiếu sâu hơn (load cả `divided_data`, vài GB — chậm nhưng chắc chắn):
 
 ```python
-!python /kaggle/working/CAFA6/scripts/audit_data.py --deep
+!python /kaggle/working/_4study/CAFA6/scripts/audit_data.py --deep
 ```
 
 Kiểm tra thêm: protein ID trong `{ns}_{train,valid,test}_dataset` có đúng nhóm
@@ -201,10 +206,10 @@ cập nhật `/kaggle/working/cafa6_output.zip` ngay sau mỗi nhánh (an toàn 
 session bị ngắt giữa chừng). ~1–2 giờ tổng (BP chậm nhất).
 
 ```python
-%env DATA_DIR=/kaggle/working/CAFA6
+%env DATA_DIR=/kaggle/working/_4study/CAFA6
 %env DGL_CUDA=1
 
-!python /kaggle/working/CAFA6/scripts/kaggle_run_branches.py
+!python /kaggle/working/_4study/CAFA6/scripts/kaggle_run_branches.py
 ```
 
 | Tình huống | Lệnh |
@@ -222,20 +227,20 @@ session bị ngắt giữa chừng). ~1–2 giờ tổng (BP chậm nhất).
 **OOM trên T4 16GB** → giảm batch:
 
 ```python
-!python /kaggle/working/CAFA6/scripts/kaggle_run_branches.py -- -batch_size 64
+!python /kaggle/working/_4study/CAFA6/scripts/kaggle_run_branches.py -- -batch_size 64
 ```
 
 Train riêng 1 nhánh (kiểm soát đầy đủ tham số):
 
 ```python
-%env DATA_DIR=/kaggle/working/CAFA6
+%env DATA_DIR=/kaggle/working/_4study/CAFA6
 %env DGL_CUDA=1
 
-!python /kaggle/working/CAFA6/train_Struct2GO2.py \
+!python /kaggle/working/_4study/CAFA6/train_Struct2GO2.py \
   -branch bp --no-baseline-parity --kaggle \
   -epochs 6 -dropout 0.1 -batch_size 64 -validate_every 3 --amp
 
-!python /kaggle/working/CAFA6/eval_Struct2GO2.py -branch bp --baseline-parity --split test
+!python /kaggle/working/_4study/CAFA6/eval_Struct2GO2.py -branch bp --baseline-parity --split test
 ```
 
 ---
@@ -243,8 +248,8 @@ Train riêng 1 nhánh (kiểm soát đầy đủ tham số):
 ## Cell 7 — Đọc log: 4 dòng cần kiểm tra
 
 ```python
-!tail -40 /kaggle/working/CAFA6/log/cc.log
-!tail -20 /kaggle/working/CAFA6/log/test_cc.log
+!tail -40 /kaggle/working/_4study/CAFA6/log/cc.log
+!tail -20 /kaggle/working/_4study/CAFA6/log/test_cc.log
 ```
 
 | Dòng trong log | Ý nghĩa | Cần thấy gì |
@@ -280,20 +285,20 @@ Script: [`scripts/run_fusion_ablation.py`](scripts/run_fusion_ablation.py)
 | `quality` | 15 / 1e-4 | 12 / 1e-4 | 12 / 1e-4 | ~10–14 h |
 
 ```python
-%env DATA_DIR=/kaggle/working/CAFA6
+%env DATA_DIR=/kaggle/working/_4study/CAFA6
 %env DGL_CUDA=1
 
 # Đủ 4 hướng (~6–8 h) — dễ vượt giới hạn 1 session T4
-!python /kaggle/working/CAFA6/scripts/run_fusion_ablation.py --profile balanced
+!python /kaggle/working/_4study/CAFA6/scripts/run_fusion_ablation.py --profile balanced
 
 # Gọn hơn: chỉ so 1 chiều vs 2 chiều (~3–4 h)
-!python /kaggle/working/CAFA6/scripts/run_fusion_ablation.py --profile balanced --configs ppi_attn ppi_bi_attn
+!python /kaggle/working/_4study/CAFA6/scripts/run_fusion_ablation.py --profile balanced --configs ppi_attn ppi_bi_attn
 
 # Chỉ 1 nhánh, override epoch
-!python /kaggle/working/CAFA6/scripts/run_fusion_ablation.py --profile balanced --branches mf -epochs 12
+!python /kaggle/working/_4study/CAFA6/scripts/run_fusion_ablation.py --profile balanced --branches mf -epochs 12
 
 # Chỉ eval lại (checkpoint đã có)
-!python /kaggle/working/CAFA6/scripts/run_fusion_ablation.py --eval-only --profile balanced
+!python /kaggle/working/_4study/CAFA6/scripts/run_fusion_ablation.py --eval-only --profile balanced
 ```
 
 ### 8.2 Loss — `bce` / `bce_pos_weight` / `focal`
@@ -303,8 +308,8 @@ fusion × loss để tránh nổ số run). Checkpoint được thêm hậu tố
 không đè lên run mặc định.
 
 ```python
-!python /kaggle/working/CAFA6/scripts/run_fusion_ablation.py --configs ppi_attn --loss bce_pos_weight
-!python /kaggle/working/CAFA6/scripts/run_fusion_ablation.py --configs ppi_attn --loss focal
+!python /kaggle/working/_4study/CAFA6/scripts/run_fusion_ablation.py --configs ppi_attn --loss bce_pos_weight
+!python /kaggle/working/_4study/CAFA6/scripts/run_fusion_ablation.py --configs ppi_attn --loss focal
 ```
 
 Checkpoint: `bestmodel_{branch}_{config}_{batch}_{lr}_{dropout}[_{loss}].pkl`
@@ -315,10 +320,10 @@ Kết quả: `log/fusion_ablation_summary.json`, `log/test_{branch}_{config}.log
 ## Cell 9 — Lưu kết quả + tải về
 
 ```python
-%env DATA_DIR=/kaggle/working/CAFA6
+%env DATA_DIR=/kaggle/working/_4study/CAFA6
 
 BRANCHES = "cc mf bp"   # đổi nếu mới xong 1–2 nhánh
-!python /kaggle/working/CAFA6/scripts/kaggle_save_results.py \
+!python /kaggle/working/_4study/CAFA6/scripts/kaggle_save_results.py \
   --branches {BRANCHES} --zip --per-branch-zip --split-mb 75
 ```
 
@@ -367,7 +372,7 @@ for i, z in enumerate(sorted(work.glob("cafa6_*.zip"))):
 **Zip lớn (đủ model 3 nhánh, ~300 MB):** Save Version (Commit) → chờ chạy xong →
 tab **Output** → tải `cafa6_output_part*.zip`.
 
-**Giải nén về local:** copy `log/`, `save_models/`, `test_result/` vào `D:\CAFA6\`.
+**Giải nén về local:** copy `log/`, `save_models/`, `test_result/` vào thư mục `CAFA6/` ở máy local.
 
 ---
 
@@ -388,16 +393,16 @@ python pack_for_kaggle.py --branch mf --splits train
 **`label_dim` train ≠ valid (F-max ~0.002)**
 Đang trộn dataset cũ và mới. Kiểm tra nhanh:
 ```python
-!python /kaggle/working/CAFA6/scripts/diag_mf_train.py
+!python /kaggle/working/_4study/CAFA6/scripts/diag_mf_train.py
 ```
 Phải thấy `label_dim OK (train == valid == N)` với `N` = số dòng trong
 `label_vocab_mf.json`.
 
 **`CUDA out of memory` (T4 16GB)**
 ```python
-!python /kaggle/working/CAFA6/scripts/kaggle_run_branches.py -- -batch_size 64
+!python /kaggle/working/_4study/CAFA6/scripts/kaggle_run_branches.py -- -batch_size 64
 # hoặc nhẹ hơn nữa:
-!python /kaggle/working/CAFA6/train_Struct2GO2.py -branch mf --kaggle -batch_size 48 -hid_dim 256 -num_convs 3
+!python /kaggle/working/_4study/CAFA6/train_Struct2GO2.py -branch mf --kaggle -batch_size 48 -hid_dim 256 -num_convs 3
 ```
 
 **RAM đầy khi load pickle (Kaggle 30GB)**
