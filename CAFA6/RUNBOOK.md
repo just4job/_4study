@@ -122,7 +122,8 @@ phải tự mask lúc runtime — chậm và tốn RAM hơn.
 python data_processing/3_build_graph_dataset.py
 ```
 
-**Bước nặng nhất — khoảng 1 giờ**, ghi vài GB. Sinh cho mỗi nhánh:
+Nhanh hơn tên gọi gợi ý — khoảng 1 phút cho cả 3 nhánh (contact map đã dựng sẵn
+ở `proteins_edges/`, bước này chỉ ghép lại). Sinh cho mỗi nhánh:
 `emb_graph_{ns}`, `emb_seq_feature_{ns}`, `emb_label_{ns}`, `emb_ppi_node_id_{ns}`,
 `label_{ns}_network`.
 
@@ -131,8 +132,8 @@ Chờ thấy ở đầu log — **đọc kỹ 4 dòng này**:
 ```
 ✓ node2vec: 14,871 protein
 ✓ onehot  : 20,521 protein
-✓ SeqVec  : 20,4xx protein
-✓ PPI index: 20,5xx protein
+✓ SeqVec  : 20,485 protein
+✓ PPI index: 19,661 protein
 ```
 
 Dấu `✗` ở dòng nào nghĩa là feature đó bị thay bằng **vector 0** cho toàn bộ
@@ -154,7 +155,9 @@ chạy, quay lại.
 python data_processing/divide_data.py --force
 ```
 
-Nặng RAM. Sinh `divided_data/{ns}_{train,valid,test}_dataset`, tổng khoảng 30 GB.
+Nặng RAM — nó nạp trọn `emb_*` của một nhánh vào bộ nhớ rồi mới ghi. Sinh
+`divided_data/{ns}_{train,valid,test}_dataset`; kích thước bằng khoảng 3 lần
+`emb_*` của nhánh đó (`du -sh proceed_data` để ước lượng trước).
 
 Chờ thấy `Dùng split_{ns}.json (seed=42)` — nếu thấy `[WARN] Chưa có split_{ns}.json
 — random split tại chỗ` thì split đang bị chia lại, **sai**, dừng và quay về B1.
