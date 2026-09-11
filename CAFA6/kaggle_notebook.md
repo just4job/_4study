@@ -370,10 +370,18 @@ và chỉ vài trăm KB; checkpoint chiếm gần hết 60+ MB của bản zip �
 checkpoint để train tiếp thì `models=True`, hoặc lấy từ tab **Output** của
 Version — đường đó không giới hạn dung lượng.
 
-Hai ngưỡng an toàn trong script (nhúng base64 làm 1 MB zip phình thành ~1,37 MB
-text trong DOM): file > **25 MB** và tổng > **120 MB** thì không tự tải nữa mà
-đưa link thường. Nhiều file thì mỗi link cách nhau 1,5 giây — bấm liên tiếp
-trong vài mili giây là trình duyệt chặn hết trừ cái đầu.
+Script phát ra một **nút bấm**, không tự tải hộ: Kaggle render output trong
+iframe sandbox nên trình duyệt chặn mọi download không đến từ thao tác người
+dùng — `.click()` bằng script chỉ im lặng không làm gì. Một cú bấm thật thì luôn
+được phép.
+
+Hai ngưỡng an toàn (nhúng base64 làm 1 MB zip phình thành ~1,37 MB text trong
+DOM): file > **25 MB** và tổng > **120 MB** thì không nhúng nữa mà đưa link thường.
+
+Không thấy nút — đang chạy chế độ **Commit** (không có trình duyệt) hoặc output
+bị nuốt — thì lấy file ở panel bên phải: **Output → `/kaggle/working` → 🔄
+refresh → chuột phải file → Download**. Đường này luôn dùng được và không giới
+hạn dung lượng.
 
 Muốn gom file mà chưa tải: `download("cc", auto=False)` chỉ tạo zip rồi trả về
 danh sách đường dẫn.

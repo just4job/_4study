@@ -58,20 +58,23 @@ def _found_branches(out_log: Path) -> list[str]:
     return [b for b in BRANCHES if f"{b}.log" in names]
 
 
-def _emit(path: Path, delay_ms: int) -> bool:
-    """Phát thẻ <a download> tự bấm. True nếu đã nhúng được file."""
+def _emit(path: Path) -> bool:
+    """Phát một NÚT tải nhìn thấy được. True nếu đã nhúng được file.
+
+    Cố tình không tự bấm hộ: Kaggle render output trong iframe sandbox và trình
+    duyệt chặn mọi download không đến từ thao tác của người dùng, nên `.click()`
+    bằng script chỉ im lặng không làm gì. Một cú bấm thật thì luôn được phép.
+    """
     from IPython.display import HTML, display
 
     mb = path.stat().st_size / 1e6
-    uid = "dl_" + path.name.replace(".", "_").replace("-", "_")
     b64 = base64.b64encode(path.read_bytes()).decode()
     display(HTML(
-        f'<a id="{uid}" download="{path.name}" '
-        f'href="data:application/zip;base64,{b64}"></a>'
-        f"<script>setTimeout(function(){{"
-        f"var a=document.getElementById('{uid}'); if(a) a.click();}},{delay_ms});</script>"
-        f"<p>⬇️ <b>{path.name}</b> ({mb:.1f} MB) — trình duyệt sẽ tự tải sau "
-        f"{delay_ms / 1000:.1f}s</p>"
+        f'<a download="{path.name}" href="data:application/zip;base64,{b64}" '
+        f'style="display:inline-block;padding:10px 18px;margin:6px 0;'
+        f'background:#20beff;color:#fff;font-weight:600;border-radius:6px;'
+        f'text-decoration:none;font-family:sans-serif">'
+        f'⬇️ Tải {path.name} ({mb:.1f} MB)</a>'
     ))
     return True
 
@@ -133,14 +136,15 @@ def download(
         return parts
 
     print()
-    for i, p in enumerate(parts):
+    for p in parts:
         if p.stat().st_size / 1e6 > MAX_AUTO_MB:
             _link(p, f"lớn hơn {MAX_AUTO_MB:.0f} MB")
         else:
-            # Giãn cách: bấm nhiều link tải liên tiếp trong vài mili giây thì
-            # trình duyệt chặn hết trừ cái đầu tiên.
-            _emit(p, delay_ms=1500 * i)
-    print("\nTrình duyệt có thể hỏi 'cho phép tải nhiều file?' — chọn Allow.")
+            _emit(p)
+    print("\nBấm nút xanh ở trên để tải. Không thấy nút (output bị Kaggle nuốt, "
+          "hoặc đang chạy chế độ Commit)?\n"
+          "  -> Panel bên phải > Output > /kaggle/working > bấm 🔄 refresh > "
+          "chuột phải file > Download")
     return parts
 
 
