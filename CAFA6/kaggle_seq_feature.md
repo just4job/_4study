@@ -105,9 +105,9 @@ if torch.cuda.is_available():
 
 ## Cell 4 — Chạy ESM-2
 
-Ô này TỰ CHỨA: chạy lại được sau khi session bị ngắt mà không cần chạy lại ô nào
-khác. Ngắt session làm mất cả gói pip đã cài lẫn biến trong bộ nhớ notebook, nên
-ô này dựng lại hết trước khi gọi script.
+Ô này TỰ CHỨA — clone repo, cài gói, đặt biến môi trường rồi mới gọi script. Nhờ
+vậy nó chạy đúng cả khi Kaggle khởi động một session hoàn toàn mới (chế độ
+**Save & Run All** bên dưới luôn bắt đầu từ máy trắng).
 
 ```python
 import glob, os, shutil
@@ -133,9 +133,24 @@ trị từ bộ nhớ notebook, nên sau khi session ngắt nó truyền nguyên
 cho bash và báo `cd: {REPO}: No such file or directory`. `os.environ` cũng được
 set lại ngay trong cùng ô để tiến trình `python` con nhận đúng `DATA_DIR`/`RAW_DIR`.
 
-Script lưu checkpoint mỗi 200 protein vào `dict_sequence_feature.ckpt` trong
-`/kaggle/working` — thư mục này sống sót qua restart, nên chạy lại ô là tiếp tục
-từ chỗ dừng.
+### Chạy bằng "Save & Run All", đừng ngồi canh tab
+
+`/kaggle/working` **chỉ tồn tại trong một session**. Session kết thúc (đóng tab quá
+lâu, hết hạn mức, mạng rớt) là mất sạch: repo đã clone, gói đã `pip install`, và cả
+file checkpoint. Checkpoint mỗi 200 protein chỉ cứu được trường hợp kernel restart
+TRONG cùng session — không cứu được khi session chết.
+
+Với job 30–60 phút, cách đúng là chạy nền:
+
+1. Dán toàn bộ ô trên vào **một ô duy nhất** (nó đã tự chứa)
+2. **Save Version** (góc trên phải) → chọn **Save & Run All (Commit)**, KHÔNG phải
+   "Quick Save" → **Save**
+
+Kaggle chạy notebook từ đầu đến cuối trên máy chủ của họ. Đóng tab, tắt máy đều
+được. Xem tiến độ ở tab **Versions**.
+
+Quan trọng: output của một Commit được **lưu vĩnh viễn** vào tab **Output** của
+version đó, khác hẳn session tương tác.
 
 **Cấu hình mặc định** (sửa ở đầu `5_build_seq_feature.py` nếu cần):
 
@@ -175,7 +190,8 @@ print("shape:", getattr(first, "shape", len(first)))
 
 Kỳ vọng: khoảng 20.000+ protein, vector 1024 chiều, ~85 MB.
 
-Bấm **Output** ở panel bên phải → tải `dict_sequence_feature` về, chép vào
+Chạy bằng **Save & Run All** thì vào notebook → tab **Output** của version vừa
+chạy → tải `dict_sequence_feature` về, chép vào
 `~/Downloads/_4study/CAFA6/proceed_data/`.
 
 Xoá file checkpoint cho gọn (không cần giữ):
