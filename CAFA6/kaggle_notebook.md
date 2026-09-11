@@ -336,56 +336,39 @@ Kết quả: `log/fusion_ablation_summary.json`, `log/test_{branch}_{config}.log
 
 ---
 
-## Cell 9 — Lưu kết quả + tải về
+## Cell 9 — Tải kết quả về máy
 
 ```python
-%env DATA_DIR=/kaggle/working/_4study/CAFA6
+import sys
+sys.path.insert(0, "/kaggle/working/_4study/CAFA6")
+from scripts.kaggle_download import download
 
-BRANCHES = "cc mf bp"   # đổi nếu mới xong 1–2 nhánh
-!python /kaggle/working/_4study/CAFA6/scripts/kaggle_save_results.py \
-  --branches {BRANCHES} --zip --per-branch-zip --split-mb 75
+download("cc")                  # log + test_result — vài trăm KB, tải ngay
+# download("cc", models=True)   # kèm checkpoint .pkl (~40-60 MB/nhánh)
+# download()                    # mọi nhánh đang có trong /kaggle/working
 ```
 
-Gom `log/`, `save_models/`, `test_result/` về `/kaggle/working/` và tạo:
-`cafa6_output.zip` (hoặc `cafa6_output_part1.zip`, `part2.zip`, … nếu > 75 MB) +
-`cafa6_{cc,mf,bp}.zip` từng nhánh.
+Phải `import` chứ không chạy bằng `!python`: trình duyệt chỉ tải được khi
+notebook phát ra thẻ `<a download>`, mà muốn phát HTML thì code phải chạy trong
+chính tiến trình notebook — `!python` là tiến trình con, output chỉ là văn bản.
 
-Kiểm tra + tải file nhỏ trực tiếp trong trình duyệt:
+Mặc định **không kèm checkpoint**. `log/` + `test_result/` là thứ cần đọc ngay
+và chỉ vài trăm KB; checkpoint chiếm gần hết 60+ MB của bản zip đầy đủ. Cần
+checkpoint để train tiếp thì `models=True`, hoặc lấy từ tab **Output** của
+Version — đường đó không giới hạn dung lượng.
+
+Hai ngưỡng an toàn trong script (nhúng base64 làm 1 MB zip phình thành ~1,37 MB
+text trong DOM): file > **25 MB** và tổng > **120 MB** thì không tự tải nữa mà
+đưa link thường. Nhiều file thì mỗi link cách nhau 1,5 giây — bấm liên tiếp
+trong vài mili giây là trình duyệt chặn hết trừ cái đầu.
+
+Muốn gom file mà chưa tải: `download("cc", auto=False)` chỉ tạo zip rồi trả về
+danh sách đường dẫn.
+
+Xem nhanh có gì trong `/kaggle/working`:
 
 ```python
-import base64
-from pathlib import Path
-from IPython.display import HTML, FileLink, display
-
-MAX_AUTO_MB = 75
-work = Path("/kaggle/working")
-
-for folder in ("log", "save_models", "test_result"):
-    p = work / folder
-    print(f"\n=== {folder}/ ===")
-    for f in sorted(p.glob("*")) if p.is_dir() else []:
-        size = f.stat().st_size
-        print(f"  {f.name}  ({size/1e6:.1f} MB)" if size > 1e6 else f"  {f.name}  ({size} B)")
-
-def download(path: Path, delay_ms: int = 0) -> None:
-    if not path.is_file():
-        return
-    mb = path.stat().st_size / 1e6
-    if mb > MAX_AUTO_MB:
-        display(FileLink(str(path), result_html_suffix="?download=1"))
-        print(f"  ⚠ {path.name} ({mb:.0f} MB) — bấm link, hoặc Save Version → tab Output")
-        return
-    uid = "dl_" + path.name.replace(".", "_")
-    b64 = base64.b64encode(path.read_bytes()).decode()
-    js = f"setTimeout(function(){{document.getElementById('{uid}').click();}},{delay_ms});" if delay_ms else ""
-    display(HTML(
-        f'<a id="{uid}" download="{path.name}" href="data:application/zip;base64,{b64}"></a>'
-        f"<script>{js}</script><p>⬇️ <b>{path.name}</b> ({mb:.1f} MB)</p>"
-    ))
-
-print("\n=== Tải về ===")
-for i, z in enumerate(sorted(work.glob("cafa6_*.zip"))):
-    download(z, delay_ms=500 * i)
+!ls -lh /kaggle/working/log /kaggle/working/test_result /kaggle/working/*.zip
 ```
 
 **Zip lớn (đủ model 3 nhánh, ~300 MB):** Save Version (Commit) → chờ chạy xong →

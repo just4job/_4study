@@ -190,15 +190,20 @@ def _collect_outputs(
     out_test: Path,
     branch: str | None = None,
     branches: list[str] | None = None,
+    include_models: bool = True,
 ) -> list[tuple[Path, str]]:
-    """Return (file_path, arcname) pairs; optional filter by GO branch name in filename."""
+    """Return (file_path, arcname) pairs; optional filter by GO branch name in filename.
+
+    include_models=False bỏ save_models/: checkpoint chiếm hầu hết dung lượng
+    (~40-60 MB/nhánh) trong khi log + test_result chỉ vài trăm KB, nên khi chỉ
+    cần xem kết quả thì tải bản không checkpoint nhanh hơn nhiều.
+    """
     only = branches if branches is not None else ([branch] if branch else None)
+    folders = [(out_log, "log"), (out_test, "test_result")]
+    if include_models:
+        folders.insert(1, (out_models, "save_models"))
     pairs: list[tuple[Path, str]] = []
-    for folder, arc_prefix in (
-        (out_log, "log"),
-        (out_models, "save_models"),
-        (out_test, "test_result"),
-    ):
+    for folder, arc_prefix in folders:
         if not folder.is_dir():
             continue
         for f in sorted(folder.rglob("*")):
@@ -245,11 +250,14 @@ def make_zip(
     zip_path: Path,
     data_dir: Path | None = None,
     branch: str | None = None,
+    include_models: bool = True,
 ) -> None:
     """Pack log/, save_models/, test_result/ into one zip for Kaggle download."""
     zip_path.parent.mkdir(parents=True, exist_ok=True)
     only = [branch] if branch else None
-    pairs = _collect_outputs(out_log, out_models, out_test, branches=only)
+    pairs = _collect_outputs(
+        out_log, out_models, out_test, branches=only, include_models=include_models
+    )
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for f, arcname in pairs:
             zf.write(f, arcname=arcname)
@@ -271,10 +279,13 @@ def make_split_zips(
     zip_base: Path,
     max_mb: float,
     branches: list[str] | None = None,
+    include_models: bool = True,
 ) -> list[Path]:
     """Split all outputs into zip_base_part1.zip, part2.zip, … each ≤ max_mb (approx)."""
     max_bytes = int(max_mb * 1e6)
-    pairs = _collect_outputs(out_log, out_models, out_test, branches=branches)
+    pairs = _collect_outputs(
+        out_log, out_models, out_test, branches=branches, include_models=include_models
+    )
     if not pairs:
         return []
     parts: list[Path] = []
