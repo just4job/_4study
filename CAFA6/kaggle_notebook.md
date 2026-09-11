@@ -111,10 +111,29 @@ Lưu ý khi chạy `--relabel` trên Kaggle:
 
 ```python
 !rm -rf /kaggle/working/_4study
-!git clone -b claude/cafa6-folder-summary-8j9xch \
+!git clone --depth 1 --filter=blob:none --no-checkout \
+    -b claude/cafa6-folder-summary-8j9xch \
     https://github.com/just4job/_4study.git /kaggle/working/_4study
-!ls /kaggle/working/_4study/CAFA6
+!cd /kaggle/working/_4study && git sparse-checkout set --no-cone '/*' '!/CAFA6/save_models' \
+    && git checkout claude/cafa6-folder-summary-8j9xch
+!du -sh /kaggle/working/_4study && ls /kaggle/working/_4study/CAFA6
 ```
+
+Chờ vài giây, `du -sh` ra khoảng **25 MB**.
+
+Clone thường mất khoảng **314 MB** vì `CAFA6/save_models/` chứa ~290 MB checkpoint
+của các lần train cũ. Chúng vô dụng ở đây — pipeline mới đổi `num_labels` nên
+checkpoint cũ không load được, phải train lại từ đầu — nên ba cờ dưới đây bỏ hẳn
+việc tải chúng về:
+
+| Cờ | Tác dụng |
+|---|---|
+| `--depth 1` | chỉ lấy commit mới nhất, bỏ toàn bộ lịch sử |
+| `--filter=blob:none` | hoãn tải nội dung file, chỉ tải file nào thật sự checkout |
+| `sparse-checkout ... '!/CAFA6/save_models'` | loại thư mục checkpoint ra khỏi checkout |
+
+`train_Struct2GO2.py` tự `makedirs("save_models", exist_ok=True)` nên thiếu thư mục
+đó không ảnh hưởng gì tới việc train.
 
 `rm -rf` trước khi clone: nếu lần chạy trước clone dở dang, thư mục đã tồn tại và
 `git clone` báo *"already exists and is not an empty directory"*.

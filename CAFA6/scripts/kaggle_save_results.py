@@ -12,13 +12,18 @@ import sys
 import zipfile
 from pathlib import Path
 
+# Thư mục CAFA6 suy từ vị trí script, không đoán theo đường dẫn Kaggle cố định:
+# repo có thể được clone vào /kaggle/working/_4study/CAFA6 chứ không phải
+# /kaggle/working/CAFA6 như bản notebook đầu tiên.
+REPO = Path(__file__).resolve().parents[1]
+
 
 def _log_candidates(data_dir: Path, branch: str) -> list[Path]:
     names = [f"{branch}.log"]
     roots = [
         data_dir / "log",
         Path("/kaggle/working/log"),
-        Path("/kaggle/working/CAFA6/log"),
+        REPO / "log",
     ]
     out: list[Path] = []
     for root in roots:
@@ -33,7 +38,7 @@ def _model_dirs(data_dir: Path) -> list[Path]:
     return [
         data_dir / "save_models",
         Path("/kaggle/working/save_models"),
-        Path("/kaggle/working/CAFA6/save_models"),
+        REPO / "save_models",
     ]
 
 
@@ -132,7 +137,7 @@ def _test_log_candidates(data_dir: Path, branch: str) -> list[Path]:
     roots = [
         data_dir / "log",
         Path("/kaggle/working/log"),
-        Path("/kaggle/working/CAFA6/log"),
+        REPO / "log",
     ]
     out: list[Path] = []
     for root in roots:
@@ -147,7 +152,7 @@ def copy_test_result(
 ) -> None:
     src_dir = data_dir / "test_result"
     if not src_dir.is_dir():
-        src_dir = Path("/kaggle/working/CAFA6/test_result")
+        src_dir = REPO / "test_result"
     if src_dir.is_dir():
         out_test.mkdir(parents=True, exist_ok=True)
         for pattern in (
@@ -307,7 +312,7 @@ def main() -> None:
     parser.add_argument(
         "--data-dir",
         default=None,
-        help="Thư mục CAFA6 (mặc định: DATA_DIR hoặc /kaggle/working/CAFA6)",
+        help="Thư mục CAFA6 (mặc định: DATA_DIR, hoặc chính thư mục chứa script này)",
     )
     parser.add_argument(
         "--branches",
@@ -346,7 +351,7 @@ def main() -> None:
 
     import os
 
-    data_dir = Path(args.data_dir or os.environ.get("DATA_DIR", "/kaggle/working/CAFA6"))
+    data_dir = Path(args.data_dir or os.environ.get("DATA_DIR", str(REPO)))
     out_log = Path("/kaggle/working/log")
     out_models = Path("/kaggle/working/save_models")
     out_test = Path("/kaggle/working/test_result")

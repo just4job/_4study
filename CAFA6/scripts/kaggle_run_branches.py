@@ -2,9 +2,9 @@
 """Train CAFA6 branches on Kaggle (cc → mf → bp), save outputs, build zip.
 
 Usage (from notebook, after kaggle_link_data.py):
-  %env DATA_DIR=/kaggle/working/CAFA6
+  %env DATA_DIR=/kaggle/working/_4study/CAFA6
   %env DGL_CUDA=1
-  !python /kaggle/working/CAFA6/scripts/kaggle_run_branches.py
+  !python /kaggle/working/_4study/CAFA6/scripts/kaggle_run_branches.py
 
   # Train only, skip eval:
   !python .../kaggle_run_branches.py --no-eval
@@ -43,7 +43,7 @@ def _run(cmd: list[str], cwd: Path, env: dict[str, str]) -> int:
 
 def _pickle_patch_env() -> dict[str, str]:
     env = os.environ.copy()
-    env.setdefault("DATA_DIR", "/kaggle/working/CAFA6")
+    env.setdefault("DATA_DIR", str(REPO))
     env.setdefault("DGL_CUDA", "1")
     return env
 
@@ -90,7 +90,7 @@ def main() -> int:
     parser.add_argument(
         "--data-dir",
         default=None,
-        help="CAFA6 root (default: DATA_DIR or /kaggle/working/CAFA6)",
+        help="CAFA6 root (default: DATA_DIR, hoặc chính thư mục chứa script này)",
     )
     parser.add_argument(
         "--branches",
@@ -125,7 +125,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    data_dir = Path(args.data_dir or os.environ.get("DATA_DIR", "/kaggle/working/CAFA6"))
+    data_dir = Path(args.data_dir or os.environ.get("DATA_DIR", str(REPO)))
     cwd = data_dir if (data_dir / "train_Struct2GO2.py").is_file() else REPO
     out_log = Path("/kaggle/working/log")
     out_models = Path("/kaggle/working/save_models")
