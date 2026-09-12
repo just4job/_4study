@@ -57,8 +57,8 @@ Nếu OOM: vẫn giữ preset nhưng override `-batch_size 32` (ghi rõ trong b�
 | split | **test** (bắt buộc; không fallback valid) |
 | batch_size | 32 (cố định trong script) |
 | model mặc định | `save_models/bestmodel_{branch}_64_0.0001_0.3.pkl` |
-| `-thresh` (JSON) | mf **0.71**, cc **0.5**, bp **0.4** |
-| F-max trong log | quét 99 ngưỡng |
+| `-thresh` (JSON) | mf **0.71**, cc **0.5**, bp **0.4** — chỉ ảnh hưởng `*_result.json` |
+| F-max trong log | quét 99 ngưỡng **trên valid**, áp nguyên sang test (đã fix threshold-leak — xem [EVAL.md](EVAL.md)) |
 
 ```bash
 set DATA_DIR=D:\CAFA6

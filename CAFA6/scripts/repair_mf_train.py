@@ -1,19 +1,44 @@
 #!/usr/bin/env python3
 """Copy mf_train_dataset hợp lệ từ /kaggle/input → DATA_DIR/divided_data.
 
-final-data: mf_train thường EOF; mf_valid OK (422 labels).
-mf-train1: đọc được nhưng 5136 labels — KHÔNG dùng với valid final-data.
+Lịch sử: "final-data" (mf_train thường EOF; mf_valid OK) từng có đúng 422
+labels, còn "mf-train1" có 5136 labels (không lọc tần suất — bug đã sửa ở
+data_processing/split_protein_ids.py + 3_build_graph_dataset.py, xem README
+mục 3, Bước 2b) nên KHÔNG khớp valid 422 label. Script này giờ ưu tiên đọc
+proceed_data/label_vocab_mf.json (nếu đã chạy Bước 2b) làm "label_dim đúng"
+thay vì hardcode 422 — số 422 chỉ còn dùng làm fallback cuối khi không có
+nguồn nào khác để đối chiếu (dữ liệu build theo pipeline cũ).
 Upload kaggle_mf_train.zip từ pack_for_kaggle.py (--branch mf --splits train).
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import pickle
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+
+# Fallback cuối cùng khi không có label_vocab_mf.json lẫn mf_valid_dataset để
+# đối chiếu — số 422 từ 1 lần build thủ công trước khi có bộ lọc min-count
+# đúng trong pipeline (xem README mục 3, Bước 2b). KHÔNG còn là "đúng theo
+# thiết kế" — chỉ là phỏng đoán hợp lý cho dữ liệu build theo pipeline cũ.
+_LEGACY_MF_LABEL_DIM = 422
+
+
+def _expected_label_dim_from_vocab(data_dir: Path) -> int | None:
+    """Đọc proceed_data/label_vocab_mf.json (sinh bởi split_protein_ids.py,
+    Bước 2b) — nguồn "label_dim đúng" đáng tin cậy nhất, thay cho hardcode 422."""
+    vocab_path = data_dir / "proceed_data" / "label_vocab_mf.json"
+    if not vocab_path.is_file():
+        return None
+    try:
+        with open(vocab_path, "r", encoding="utf-8") as f:
+            return len(json.load(f))
+    except Exception:
+        return None
 
 
 def _register_pickle() -> None:
@@ -89,10 +114,12 @@ def find_best_mf_train(
         )
 
     best = max(candidates, key=lambda c: c[0].stat().st_size)
-    if best[2] not in (None, 422):
+    if best[2] not in (None, _LEGACY_MF_LABEL_DIM):
         print(
-            f"\n  [WARN] Chọn file lớn nhất labels={best[2]} — "
-            "có thể không khớp mf_valid (422). Kiểm tra trước train."
+            f"\n  [WARN] Chọn file lớn nhất labels={best[2]} — không có "
+            "label_vocab_mf.json/mf_valid_dataset để đối chiếu label_dim đúng, "
+            f"so với số cũ {_LEGACY_MF_LABEL_DIM} ('final-data' trước khi có bộ lọc "
+            "min-count đúng, xem README mục 3 — Bước 2b). Kiểm tra tay trước khi train."
         )
     return best[0], best[1]
 
@@ -110,6 +137,12 @@ def _copy_split(src: Path, data_dir: Path, split: str) -> int | None:
 
 
 def _infer_required_label_dim(data_dir: Path) -> int | None:
+    # Ưu tiên label_vocab_mf.json (Bước 2b, đã tính đúng bộ lọc min-count) —
+    # đáng tin hơn suy luận từ mf_valid_dataset hiện có (có thể là file cũ/stale
+    # từ trước khi có fix). Fallback về mf_valid_dataset nếu chưa chạy Bước 2b.
+    from_vocab = _expected_label_dim_from_vocab(data_dir)
+    if from_vocab is not None:
+        return from_vocab
     valid_dst = data_dir / "divided_data" / "mf_valid_dataset"
     if valid_dst.is_file():
         return _label_dim(valid_dst)

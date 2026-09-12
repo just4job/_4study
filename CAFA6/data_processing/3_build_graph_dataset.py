@@ -18,10 +18,30 @@ Output (per branch bp / mf / cc):
   proceed_data/emb_label_{ns}            ← {ID → torch.FloatTensor (num_labels,)}
   proceed_data/label_vocab_{ns}.json     ← list of GO terms (index → GO term)
   proceed_data/label_{ns}_network        ← dgl.DGLGraph của GO label co-occurrence
+                                            (CHỈ tính từ protein tập TRAIN — xem dưới)
+
+PPI leakage guard (build-time): nếu đã chạy split_protein_ids.py (Bước 2b) và có
+proceed_data/split_{ns}.json, label co-occurrence graph (label_{ns}_network) chỉ
+được tính từ annotation của protein thuộc tập TRAIN — tránh rò rỉ thống kê
+đồng-xuất-hiện GO term của valid/test vào 1 artifact dùng chung cho cả train lẫn
+inference. Nếu chưa có split_{ns}.json (pipeline cũ), fallback: tính từ toàn bộ
+protein (in cảnh báo) — xem README mục 4.5.
+
+Label vocabulary (label_vocab_{ns}.json): ĐỌC THẲNG file do split_protein_ids.py
+sinh ra (đã lọc theo tần suất min-count, đếm CHỈ trên protein train) thay vì tự
+build lại từ toàn bộ protein_labels như trước — trước đây script này rebuild
+vocab không lọc rồi GHI ĐÈ lên bộ lọc min-count của 2_build_go_namespace.py,
+khiến cả GO term chỉ xuất hiện ở 1 protein cũng thành nhãn phải học (mất cân
+bằng cực đoan, xem README mục 3 — Bước 2b). GO term chỉ xuất hiện ở valid/test
+(không có trong train) bị loại tự nhiên — hợp lý vì model không có tín hiệu
+train nào cho nhãn đó. Nếu chưa có label_vocab_{ns}.json (pipeline cũ, chưa
+chạy split_protein_ids.py), fallback: rebuild không lọc từ toàn bộ protein_labels
+như hành vi cũ (in cảnh báo).
 """
 
 import json
 import pickle
+import sys
 import warnings
 from pathlib import Path
 
@@ -30,10 +50,15 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from data_processing.paths import resolve_data_dir
+from data_processing.split_utils import load_split, load_vocab
+
 warnings.filterwarnings("ignore")
 
 # ── Cấu hình đường dẫn ────────────────────────────────────────────────────────
-BASE_DIR    = Path("D:/CAFA6")
+BASE_DIR    = resolve_data_dir()
 PROC_DIR    = BASE_DIR / "proceed_data"
 EDGES_DIR   = PROC_DIR / "proteins_edges"
 
@@ -188,22 +213,56 @@ for ns_type, acs_path in ACS_FILES.items():
     with open(acs_path, "r", encoding="utf-8") as f:
         protein_labels: dict[str, list] = json.load(f)
 
-    # 2. Xây dựng từ điển GO Term → index (label vocabulary)
-    all_go_terms = sorted({t for terms in protein_labels.values() for t in terms})
+    # 2. Từ điển GO Term → index (label vocabulary) — đọc từ split_protein_ids.py
+    #    (đã lọc theo tần suất min-count, đếm chỉ trên train) nếu có; nếu chưa
+    #    chạy Bước 2b thì fallback rebuild không lọc như hành vi cũ.
+    prebuilt_vocab = load_vocab(PROC_DIR, ns_type)
+    if prebuilt_vocab is not None:
+        all_go_terms = sorted(prebuilt_vocab)
+        unfiltered_count = len({t for terms in protein_labels.values() for t in terms})
+        print(
+            f"  Dùng label_vocab_{ns_type}.json đã lọc từ split_protein_ids.py: "
+            f"{len(all_go_terms):,} GO label (trước lọc: {unfiltered_count:,})"
+        )
+    else:
+        all_go_terms = sorted({t for terms in protein_labels.values() for t in terms})
+        print(
+            f"  [WARN] Chưa có label_vocab_{ns_type}.json từ split_protein_ids.py — "
+            f"dùng TOÀN BỘ {len(all_go_terms):,} GO term (không lọc tần suất, có thể "
+            "gồm cả term chỉ xuất hiện ở 1 protein). Chạy split_protein_ids.py trước "
+            "để tránh mất cân bằng cực đoan — xem README mục 3, Bước 2b."
+        )
+
     term2idx = {t: i for i, t in enumerate(all_go_terms)}
     num_labels = len(all_go_terms)
     print(f"  Số GO label: {num_labels}")
     print(f"  Số protein có annotation: {len(protein_labels):,}")
 
-    # Lưu vocabulary
+    # Lưu vocabulary (ghi lại — vô hại nếu đã đọc từ file này, đảm bảo luôn tồn tại
+    # kể cả khi fallback không lọc)
     vocab_path = PROC_DIR / f"label_vocab_{ns_type}.json"
     with open(vocab_path, "w", encoding="utf-8") as f:
         json.dump(all_go_terms, f, indent=2)
     print(f"  Lưu vocabulary → {vocab_path.name}")
 
-    # 3. Xây đồ thị label co-occurrence
-    print("  Đang xây label network...")
-    label_graph = build_label_graph(all_go_terms, protein_labels)
+    # 3. Xây đồ thị label co-occurrence — CHỈ từ protein tập TRAIN nếu có
+    #    split_{ns}.json (Bước 2b), tránh leak thống kê đồng-xuất-hiện của valid/test.
+    split = load_split(PROC_DIR, ns_type)
+    if split is not None:
+        train_ids = set(split["train"])
+        label_source = {pid: terms for pid, terms in protein_labels.items() if pid in train_ids}
+        print(
+            f"  Đang xây label network (chỉ từ {len(label_source):,}/{len(protein_labels):,} "
+            f"protein train, theo split_{ns_type}.json)..."
+        )
+    else:
+        label_source = protein_labels
+        print(
+            f"  [WARN] Chưa có split_{ns_type}.json — label network tính từ TOÀN BỘ "
+            f"{len(protein_labels):,} protein (train+valid+test). Chạy "
+            "split_protein_ids.py trước để tránh leak — xem README mục 4.5."
+        )
+    label_graph = build_label_graph(all_go_terms, label_source)
     label_net_path = PROC_DIR / f"label_{ns_type}_network"
     with open(label_net_path, "wb") as f:
         pickle.dump(label_graph, f)

@@ -97,6 +97,12 @@ Trên CAFA6 / Kaggle thường dùng:
 | Validate every | 4 epoch | 3–6 epoch (preset: cuối cùng) |
 | Số ngưỡng F-max | 99 | 5 (preset Kaggle) |
 | `ppi_node_ids` trong batch | Không | Có |
+| PPI leakage guard | N/A (không có nhánh PPI) | Bật mặc định — xem [README chính, mục 4.5](../README.md#45-chống-rò-rỉ-dữ-liệu-qua-ppi-ppi-leakage-guard) |
+
+> **Lưu ý khi so sánh:** guard chỉ ảnh hưởng nhánh PPI (ẩn cạnh valid/test khi train),
+> không phụ thuộc `--baseline-parity`/`--kaggle`. Số F-max của CAFA6 sau khi thêm
+> guard có thể thấp hơn số cũ (trước khi có guard) vì đã loại bỏ phần rò rỉ
+> transductive — đây là so sánh công bằng hơn, không phải model kém đi.
 
 ---
 
@@ -107,7 +113,7 @@ Trên CAFA6 / Kaggle thường dùng:
 | Kiến trúc | Nhỏ hơn (không PPI) hoặc one-hot | Struct2GO2 + PPI + ESM seq |
 | Thời gian train | Đủ 20 epoch, model lớn (hid 512) | Ngắn hơn (2–15 epoch), hid 256 |
 | Metric so sánh | Thường **test** trong paper | Log của bạn: **valid** / test copy valid |
-| Ngưỡng suy luận | Quét 99 mức khi train | Train: 5 mức (Kaggle); test: quét lại trong eval |
+| Ngưỡng suy luận | Quét 99 mức khi train | Train: 5 mức (Kaggle); test: threshold chọn từ **valid** rồi áp sang test (đã fix threshold-leak — xem [EVAL.md](EVAL.md) và [README chính mục 5](../README.md#5-đánh-giá)) |
 
 Khi viết báo cáo, nên ghi rõ: *baseline theo Table 1 (Struct2GO / with one-hot)* và *cấu hình train CAFA6 (epoch, hid, PPI, preset Kaggle)*.
 

@@ -56,3 +56,51 @@ def calculate_performance(actual, pred_prob, label_network:dgl.DGLGraph, thresho
     recall = recall_score(actual_label, pred_lable, average=average)
     precision = precision_score(actual_label,  pred_lable, average=average)
     return f_score, precision, recall
+
+
+def per_label_f1(actual, pred_prob, threshold: float = 0.2) -> np.ndarray:
+    """F1 RIÊNG cho từng label (average=None) — dùng để tính macro-F1 hoặc
+    breakdown theo nhóm tần suất. KHÔNG dùng để chọn checkpoint (vẫn micro như
+    calculate_performance ở trên) — chỉ để CHẨN ĐOÁN model có bỏ rơi label hiếm
+    hay không, vì micro-F1 bị label phổ biến che mất (mỗi mẫu đóng góp như nhau
+    vào TP/FP/FN gộp chung, label hiếm gần như không ảnh hưởng tới micro-F1)."""
+    pred_label = (np.asarray(pred_prob) > threshold).astype(np.int32)
+    actual_label = np.asarray(actual).astype(np.int32)
+    return f1_score(actual_label, pred_label, average=None, zero_division=0)
+
+
+def label_frequency_buckets(
+    actual, rare_max: int = 10, medium_max: int = 50
+) -> dict[str, np.ndarray]:
+    """Chia index label thành 3 nhóm theo số positive quan sát được TRONG CHÍNH
+    `actual` (nhãn thật của split đang đánh giá) — không phải tần suất trên
+    toàn bộ train, để không cần truyền thêm dữ liệu train vào hàm này:
+      rare   : < rare_max positive trong split này
+      medium : [rare_max, medium_max)
+      common : >= medium_max
+    Ngưỡng mặc định (10/50) hợp lý cho valid/test cỡ vài trăm–vài nghìn mẫu,
+    ứng với min-count train mặc định 100–250 (xem split_protein_ids.py)."""
+    counts = np.asarray(actual).sum(axis=0)
+    return {
+        "rare": np.where(counts < rare_max)[0],
+        "medium": np.where((counts >= rare_max) & (counts < medium_max))[0],
+        "common": np.where(counts >= medium_max)[0],
+    }
+
+
+def macro_and_bucket_report(
+    actual, pred_prob, threshold: float = 0.2, rare_max: int = 10, medium_max: int = 50
+) -> dict:
+    """Tổng hợp macro-F1 toàn bộ + F1 trung bình riêng từng nhóm tần suất
+    (rare/medium/common) tại 1 threshold cố định — dùng để log chẩn đoán bên
+    cạnh F-max micro (không thay thế cơ chế chọn checkpoint hiện có)."""
+    f1_per_label = per_label_f1(actual, pred_prob, threshold=threshold)
+    buckets = label_frequency_buckets(actual, rare_max=rare_max, medium_max=medium_max)
+    report: dict = {
+        "macro_f1": float(np.mean(f1_per_label)) if len(f1_per_label) else 0.0,
+        "n_labels": int(len(f1_per_label)),
+    }
+    for name, idx in buckets.items():
+        report[f"{name}_n_labels"] = int(len(idx))
+        report[f"{name}_f1"] = float(np.mean(f1_per_label[idx])) if len(idx) else None
+    return report

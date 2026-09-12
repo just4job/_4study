@@ -12,13 +12,18 @@ import sys
 import zipfile
 from pathlib import Path
 
+# Thư mục CAFA6 suy từ vị trí script, không đoán theo đường dẫn Kaggle cố định:
+# repo có thể được clone vào /kaggle/working/_4study/CAFA6 chứ không phải
+# /kaggle/working/CAFA6 như bản notebook đầu tiên.
+REPO = Path(__file__).resolve().parents[1]
+
 
 def _log_candidates(data_dir: Path, branch: str) -> list[Path]:
     names = [f"{branch}.log"]
     roots = [
         data_dir / "log",
         Path("/kaggle/working/log"),
-        Path("/kaggle/working/CAFA6/log"),
+        REPO / "log",
     ]
     out: list[Path] = []
     for root in roots:
@@ -33,7 +38,7 @@ def _model_dirs(data_dir: Path) -> list[Path]:
     return [
         data_dir / "save_models",
         Path("/kaggle/working/save_models"),
-        Path("/kaggle/working/CAFA6/save_models"),
+        REPO / "save_models",
     ]
 
 
@@ -132,7 +137,7 @@ def _test_log_candidates(data_dir: Path, branch: str) -> list[Path]:
     roots = [
         data_dir / "log",
         Path("/kaggle/working/log"),
-        Path("/kaggle/working/CAFA6/log"),
+        REPO / "log",
     ]
     out: list[Path] = []
     for root in roots:
@@ -147,7 +152,7 @@ def copy_test_result(
 ) -> None:
     src_dir = data_dir / "test_result"
     if not src_dir.is_dir():
-        src_dir = Path("/kaggle/working/CAFA6/test_result")
+        src_dir = REPO / "test_result"
     if src_dir.is_dir():
         out_test.mkdir(parents=True, exist_ok=True)
         for pattern in (
@@ -185,15 +190,20 @@ def _collect_outputs(
     out_test: Path,
     branch: str | None = None,
     branches: list[str] | None = None,
+    include_models: bool = True,
 ) -> list[tuple[Path, str]]:
-    """Return (file_path, arcname) pairs; optional filter by GO branch name in filename."""
+    """Return (file_path, arcname) pairs; optional filter by GO branch name in filename.
+
+    include_models=False bỏ save_models/: checkpoint chiếm hầu hết dung lượng
+    (~40-60 MB/nhánh) trong khi log + test_result chỉ vài trăm KB, nên khi chỉ
+    cần xem kết quả thì tải bản không checkpoint nhanh hơn nhiều.
+    """
     only = branches if branches is not None else ([branch] if branch else None)
+    folders = [(out_log, "log"), (out_test, "test_result")]
+    if include_models:
+        folders.insert(1, (out_models, "save_models"))
     pairs: list[tuple[Path, str]] = []
-    for folder, arc_prefix in (
-        (out_log, "log"),
-        (out_models, "save_models"),
-        (out_test, "test_result"),
-    ):
+    for folder, arc_prefix in folders:
         if not folder.is_dir():
             continue
         for f in sorted(folder.rglob("*")):
@@ -240,11 +250,14 @@ def make_zip(
     zip_path: Path,
     data_dir: Path | None = None,
     branch: str | None = None,
+    include_models: bool = True,
 ) -> None:
     """Pack log/, save_models/, test_result/ into one zip for Kaggle download."""
     zip_path.parent.mkdir(parents=True, exist_ok=True)
     only = [branch] if branch else None
-    pairs = _collect_outputs(out_log, out_models, out_test, branches=only)
+    pairs = _collect_outputs(
+        out_log, out_models, out_test, branches=only, include_models=include_models
+    )
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for f, arcname in pairs:
             zf.write(f, arcname=arcname)
@@ -266,10 +279,13 @@ def make_split_zips(
     zip_base: Path,
     max_mb: float,
     branches: list[str] | None = None,
+    include_models: bool = True,
 ) -> list[Path]:
     """Split all outputs into zip_base_part1.zip, part2.zip, … each ≤ max_mb (approx)."""
     max_bytes = int(max_mb * 1e6)
-    pairs = _collect_outputs(out_log, out_models, out_test, branches=branches)
+    pairs = _collect_outputs(
+        out_log, out_models, out_test, branches=branches, include_models=include_models
+    )
     if not pairs:
         return []
     parts: list[Path] = []
@@ -307,7 +323,7 @@ def main() -> None:
     parser.add_argument(
         "--data-dir",
         default=None,
-        help="Thư mục CAFA6 (mặc định: DATA_DIR hoặc /kaggle/working/CAFA6)",
+        help="Thư mục CAFA6 (mặc định: DATA_DIR, hoặc chính thư mục chứa script này)",
     )
     parser.add_argument(
         "--branches",
@@ -346,7 +362,7 @@ def main() -> None:
 
     import os
 
-    data_dir = Path(args.data_dir or os.environ.get("DATA_DIR", "/kaggle/working/CAFA6"))
+    data_dir = Path(args.data_dir or os.environ.get("DATA_DIR", str(REPO)))
     out_log = Path("/kaggle/working/log")
     out_models = Path("/kaggle/working/save_models")
     out_test = Path("/kaggle/working/test_result")

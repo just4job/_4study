@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Train + eval ablation fusion — 3 nhánh × 2 hướng, epoch/lr tối ưu theo profile.
+"""Train + eval ablation fusion — 3 nhánh × 4 hướng, epoch/lr tối ưu theo profile.
 
-Hướng 1: PPI + concat          (--fusion concat)
-Hướng 2: không PPI + attention (--no-ppi --fusion attention)
+Hướng 1: PPI + concat                    (--fusion concat)
+Hướng 2: không PPI + attention            (--no-ppi --fusion attention)
+Hướng 3: PPI + attention 1 CHIỀU          (--fusion attention)      — struct+seq
+         làm Query cố định, PPI chỉ là Key/Value tĩnh (không được cập nhật).
+Hướng 4: PPI + attention 2 CHIỀU          (--fusion bi_attention)   — struct/seq/PPI
+         gộp thành 1 chuỗi token, self-attention đối xứng: PPI cũng được struct/seq
+         cập nhật ngược lại (xem model/layer.py:BidirectionalCrossAttention).
 
-Hai hướng dùng **cùng** epoch / lr / batch / dropout trên mỗi nhánh → so sánh công bằng.
+Cả 4 hướng dùng **cùng** epoch / lr / batch / dropout trên mỗi nhánh → so sánh công bằng.
+Muốn chạy ít hướng hơn (vd. chỉ so 1 chiều vs 2 chiều): `--configs ppi_attn ppi_bi_attn`.
 
 Profiles (--profile):
   fast      ~15–25 ph/nhánh/hướng  (tổng ~2–3 h cho 6 run)
@@ -81,9 +87,11 @@ class FusionConfig:
 FUSION_CONFIGS: tuple[FusionConfig, ...] = (
     FusionConfig("ppi_concat", use_ppi=True, fusion_mode="concat"),
     FusionConfig("no_ppi_attn", use_ppi=False, fusion_mode="attention"),
+    FusionConfig("ppi_attn", use_ppi=True, fusion_mode="attention"),      # 1 chiều
+    FusionConfig("ppi_bi_attn", use_ppi=True, fusion_mode="bi_attention"),  # 2 chiều
 )
 
-# epoch / lr / validate — tối ưu thời gian; **giống nhau** cho 2 hướng trên cùng nhánh
+# epoch / lr / validate — tối ưu thời gian; **giống nhau** cho mọi hướng trên cùng nhánh
 PROFILES: dict[str, dict[str, BranchHP]] = {
     "fast": {
         "mf": BranchHP(epochs=8, learningrate=1e-4, validate_every=4, batch_size=64, est_minutes=18),
@@ -125,10 +133,13 @@ def _run(cmd: list[str], cwd: Path, env: dict[str, str]) -> int:
     return subprocess.call(cmd, cwd=str(cwd), env=env)
 
 
-def _ckpt_tag(branch: str, cfg: FusionConfig, hp: BranchHP) -> str:
+def _ckpt_tag(branch: str, cfg: FusionConfig, hp: BranchHP, loss: str | None = None) -> str:
     dr = f"{BRANCH_BASELINE_DROPOUT[branch]:g}"
     lr = _lr_tag(hp.learningrate)
-    return f"bestmodel_{branch}_{cfg.name}_{hp.batch_size}_{lr}_{dr}.pkl"
+    # loss=None (mặc định, không truyền --loss) giữ nguyên tên cũ — tương thích
+    # ngược với checkpoint đã có; chỉ thêm hậu tố khi override --loss tường minh.
+    suffix = f"_{loss}" if loss else ""
+    return f"bestmodel_{branch}_{cfg.name}_{hp.batch_size}_{lr}_{dr}{suffix}.pkl"
 
 
 def _train_ckpt(data_dir: Path, branch: str, hp: BranchHP) -> Path:
@@ -165,6 +176,7 @@ def train_one(
     cwd: Path,
     data_dir: Path,
     env: dict[str, str],
+    loss: str | None = None,
 ) -> Path:
     dropout = BRANCH_BASELINE_DROPOUT[branch]
     cmd = [
@@ -190,6 +202,12 @@ def train_one(
         "combo",
         *cfg.train_args(),
     ]
+    if loss is not None:
+        # --loss (nếu truyền) ưu tiên hơn --pos-weight ở trên — xem
+        # _build_criterion() trong train_Struct2GO2.py. Áp DÙNG CHUNG cho mọi
+        # config trong lần chạy này (không nhân chéo fusion × loss, tránh nổ số
+        # run) — muốn so 2 loss thì chạy script 2 lần với --loss khác nhau.
+        cmd += ["--loss", loss]
     rc = _run(cmd, cwd, env)
     if rc != 0:
         raise RuntimeError(f"Train failed: {branch} / {cfg.name} (exit {rc})")
@@ -198,7 +216,7 @@ def train_one(
     if not src.is_file():
         raise FileNotFoundError(f"Không thấy checkpoint sau train: {src}")
 
-    dst = data_dir / "save_models" / _ckpt_tag(branch, cfg, hp)
+    dst = data_dir / "save_models" / _ckpt_tag(branch, cfg, hp, loss=loss)
     shutil.copy2(src, dst)
     print(f"[save] {dst} ({dst.stat().st_size / 1e6:.1f} MB)")
     return dst
@@ -260,7 +278,7 @@ def _print_profile_table(profile: str, branches: list[str]) -> None:
             f"{hp.validate_every:>10} {hp.est_minutes:>6}"
         )
         total += hp.est_minutes * len(FUSION_CONFIGS)
-    print(f"Ước lượng tổng (2 hướng × {len(branches)} nhánh): ~{total} phút\n")
+    print(f"Ước lượng tổng ({len(FUSION_CONFIGS)} hướng × {len(branches)} nhánh): ~{total} phút\n")
 
 
 def _compare_branch(results: list[dict], branch: str) -> None:
@@ -285,7 +303,7 @@ def _compare_branch(results: list[dict], branch: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Ablation fusion: PPI+concat vs no-PPI+attention (3 nhánh)",
+        description="Ablation fusion: concat vs attention 1 chiều vs attention 2 chiều vs no-PPI (3 nhánh)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--data-dir", default=None)
@@ -311,6 +329,16 @@ def main() -> int:
     parser.add_argument("--baseline-eval", action="store_true")
     parser.add_argument("--train-only", action="store_true")
     parser.add_argument("--eval-only", action="store_true")
+    parser.add_argument(
+        "--loss",
+        choices=["bce", "bce_pos_weight", "focal"],
+        default=None,
+        help=(
+            "Override loss cho MỌI config trong lần chạy này (không mặc định "
+            "--pos-weight/bce_pos_weight của mỗi config nữa). Không nhân chéo "
+            "fusion × loss — muốn so loss khác nhau thì chạy script nhiều lần."
+        ),
+    )
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir or os.environ.get("DATA_DIR", str(REPO)))
@@ -318,6 +346,8 @@ def main() -> int:
     env = _env(data_dir)
     os.environ.update(env)
 
+    # Hậu tố dùng chung cho summary + log test, giống quy ước của checkpoint.
+    loss_suffix = f"_{args.loss}" if args.loss else ""
     selected = [c for c in FUSION_CONFIGS if c.name in args.configs]
     results: list[dict] = []
     failed: list[str] = []
@@ -345,11 +375,11 @@ def main() -> int:
             print(f"=== {tag} | ep={hp.epochs} lr={hp.learningrate:.0e} batch={hp.batch_size} ===")
             print("=" * 60)
 
-            ckpt = data_dir / "save_models" / _ckpt_tag(branch, cfg, hp)
+            ckpt = data_dir / "save_models" / _ckpt_tag(branch, cfg, hp, loss=args.loss)
 
             try:
                 if not args.eval_only:
-                    ckpt = train_one(branch, cfg, hp, cwd, data_dir, env)
+                    ckpt = train_one(branch, cfg, hp, cwd, data_dir, env, loss=args.loss)
 
                 if not args.train_only:
                     if not ckpt.is_file():
@@ -358,13 +388,16 @@ def main() -> int:
                     if rc != 0:
                         raise RuntimeError(f"Eval exit {rc}")
 
-                    # Lưu log test riêng từng config
+                    # Lưu log test riêng từng config (kèm hậu tố loss như checkpoint,
+                    # để lần chạy loss sau không ghi đè log của lần trước)
                     src_log = data_dir / "log" / f"test_{branch}.log"
-                    dst_log = data_dir / "log" / f"test_{branch}_{cfg.name}.log"
+                    dst_log = data_dir / "log" / f"test_{branch}_{cfg.name}{loss_suffix}.log"
                     if src_log.is_file():
                         shutil.copy2(src_log, dst_log)
 
-                metrics = _parse_test_log(data_dir / "log" / f"test_{branch}_{cfg.name}.log")
+                metrics = _parse_test_log(
+                    data_dir / "log" / f"test_{branch}_{cfg.name}{loss_suffix}.log"
+                )
                 if not metrics:
                     metrics = _parse_test_log(data_dir / "log" / f"test_{branch}.log")
                 row = {
@@ -373,6 +406,7 @@ def main() -> int:
                     "config": cfg.name,
                     "ppi": cfg.use_ppi,
                     "fusion": cfg.fusion_mode,
+                    "loss": args.loss or "bce_pos_weight",
                     "epochs": hp.epochs,
                     "dropout": dropout,
                     "batch": hp.batch_size,
@@ -415,10 +449,11 @@ def main() -> int:
     for branch in args.branches:
         _compare_branch(results, branch)
 
-    summary_path = data_dir / "log" / "fusion_ablation_summary.json"
+    summary_path = data_dir / "log" / f"fusion_ablation_summary{loss_suffix}.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "profile": args.profile,
+        "loss": args.loss or "bce_pos_weight (mặc định mỗi config)",
         "elapsed_minutes": round(elapsed, 1),
         "results": results,
         "baseline_repro": BASELINE_REPRO,

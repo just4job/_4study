@@ -153,6 +153,84 @@ class MultiModalCrossAttention(torch.nn.Module):
         return attn_out.reshape(attn_out.shape[0], -1)
 
 
+class BidirectionalCrossAttention(torch.nn.Module):
+    """Cross-attention 2 CHIỀU giữa struct/seq/PPI — khác MultiModalCrossAttention
+    (1 chiều: struct+seq làm Query cố định, PPI chỉ làm Key/Value tĩnh và không
+    được cập nhật, struct/seq cũng không attend lẫn nhau).
+
+    Cách làm: gộp cả 3 nguồn thành 1 chuỗi token [struct, seq, ppi_0, ppi_1, ...]
+    rồi chạy 1 self-attention (Q=K=V=chuỗi token) — mọi token cùng attend lẫn
+    nhau đối xứng: struct <-> seq, struct <-> ppi, seq <-> ppi đều 2 chiều. PPI
+    token vì vậy cũng được cập nhật bởi struct/seq (khác bản 1 chiều, nơi PPI chỉ
+    là ngữ cảnh tĩnh) — chỉ token struct/seq sau attend được lấy ra làm output,
+    PPI token cập nhật chỉ có tác dụng "làm giàu" struct/seq qua attention.
+
+    Cùng chữ ký forward() và out_dim với MultiModalCrossAttention nên có thể
+    thay thế trực tiếp cho ablation (fusion_mode="bi_attention" so với "attention").
+    """
+
+    def __init__(
+        self,
+        struct_dim: int,
+        seq_dim: int,
+        ppi_dim: int,
+        attn_dim: int,
+        num_heads: int = 4,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.struct_proj = torch.nn.Linear(struct_dim, attn_dim)
+        self.seq_proj = torch.nn.Linear(seq_dim, attn_dim)
+        self.ppi_proj = torch.nn.Linear(ppi_dim, attn_dim)
+        self.self_attn = torch.nn.MultiheadAttention(
+            attn_dim, num_heads, dropout=dropout, batch_first=True
+        )
+        self.norm = torch.nn.LayerNorm(attn_dim)
+        self.out_dim = attn_dim * 2
+
+    def forward(
+        self,
+        struct_feat: torch.Tensor,
+        seq_feat: torch.Tensor,
+        ppi_feat: torch.Tensor,
+        ppi_key_padding_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """
+        struct_feat / seq_feat : [B, *] — mỗi cái thành 1 token.
+        ppi_feat :
+            - [B, ppi_dim]    → 1 token PPI (tương thích ngược)
+            - [B, L, ppi_dim] → L token PPI (self + láng giềng)
+        ppi_key_padding_mask : [B, L] bool, True = vị trí padding (bỏ qua trong softmax).
+        """
+        struct_tok = self.struct_proj(struct_feat).unsqueeze(1)  # [B, 1, D]
+        seq_tok = self.seq_proj(seq_feat).unsqueeze(1)           # [B, 1, D]
+
+        if ppi_feat.dim() == 2:
+            ppi_tok = self.ppi_proj(ppi_feat).unsqueeze(1)       # [B, 1, D]
+            ppi_pad = None
+        else:
+            ppi_tok = self.ppi_proj(ppi_feat)                    # [B, L, D]
+            ppi_pad = ppi_key_padding_mask
+
+        tokens = torch.cat([struct_tok, seq_tok, ppi_tok], dim=1)  # [B, 2+L, D]
+        if ppi_pad is not None:
+            fixed_pad = torch.zeros(
+                tokens.shape[0], 2, dtype=torch.bool, device=tokens.device
+            )
+            key_padding_mask = torch.cat([fixed_pad, ppi_pad], dim=1)
+        else:
+            key_padding_mask = None
+
+        attn_out, _ = self.self_attn(
+            tokens, tokens, tokens, key_padding_mask=key_padding_mask
+        )
+        attn_out = self.norm(attn_out + tokens)
+
+        struct_out = attn_out[:, 0, :]
+        seq_out = attn_out[:, 1, :]
+        return torch.cat([struct_out, seq_out], dim=-1)  # [B, attn_dim*2]
+
+
 class ConcatFusion(torch.nn.Module):
     """LayerNorm + MLP trên vector concat — cùng out_dim với cross-attention."""
 

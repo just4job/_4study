@@ -95,9 +95,13 @@ def main() -> int:
     parser.add_argument(
         "--configs",
         nargs="+",
-        default=[c.name for c in FUSION_CONFIGS],
+        default=["ppi_concat", "no_ppi_attn"],
         choices=[c.name for c in FUSION_CONFIGS],
-        help="ppi_concat | no_ppi_attn",
+        help=(
+            "Mặc định chỉ B (ppi_concat) + C (no_ppi_attn) — đúng mục đích script này. "
+            "run_fusion_ablation.py giờ có thêm ppi_attn (1 chiều) / ppi_bi_attn (2 chiều); "
+            "truyền tay --configs nếu muốn retrain thêm 2 hướng đó qua script này."
+        ),
     )
     parser.add_argument(
         "--profile",
@@ -147,8 +151,9 @@ def main() -> int:
             print(f"\n[FAIL] Data check: {exc}", file=sys.stderr)
             if "mf_train" in str(exc).lower() or args.branches == ["mf"]:
                 print(
-                    "\nGợi ý MF: upload kaggle_mf.zip (422 labels) từ pack_for_kaggle.py, "
-                    "rồi chạy repair_mf_train.py --train-only",
+                    "\nGợi ý MF: upload kaggle_mf.zip từ pack_for_kaggle.py (label_dim "
+                    "khớp proceed_data/label_vocab_mf.json hiện tại), rồi chạy "
+                    "repair_mf_train.py --train-only",
                     file=sys.stderr,
                 )
             return 1
@@ -174,8 +179,9 @@ def main() -> int:
             except Exception as exc:
                 print(f"[FAIL] MF data chưa sẵn sàng: {exc}", file=sys.stderr)
                 print(
-                    "\nCần upload mf_train 422 labels (pack_for_kaggle.py --branch mf --splits train). "
-                    "KHÔNG dùng mf-train1 (5136 labels).",
+                    "\nCần upload mf_train có label_dim khớp mf_valid hiện tại "
+                    "(pack_for_kaggle.py --branch mf --splits train) — đừng dùng bản "
+                    "mf-train cũ không lọc tần suất GO term.",
                     file=sys.stderr,
                 )
                 return 1

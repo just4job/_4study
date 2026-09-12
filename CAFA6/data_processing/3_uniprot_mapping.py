@@ -1,3 +1,4 @@
+import sys
 """
 UniProt ID Mapping Script
 --------------------------
@@ -19,9 +20,14 @@ from pathlib import Path
 
 import requests
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from data_processing.paths import resolve_data_dir, resolve_raw_dir
+
+
 # ── Configuration ──────────────────────────────────────────────────────────────
-DEFAULT_INPUT_FILE = Path(r"D:\raw_data\ppi.txt")
-DEFAULT_OUTPUT_FILE = Path(r"D:\CAFA6\proceed_data\uniprot_ensembl_mapping.csv")
+DEFAULT_INPUT_FILE = resolve_raw_dir() / "ppi.txt"
+DEFAULT_OUTPUT_FILE = resolve_data_dir() / "proceed_data" / "uniprot_ensembl_mapping.csv"
 
 UNIPROT_API = "https://rest.uniprot.org"
 BATCH_SIZE = 500       # UniProt recommends <= 500 IDs per batch

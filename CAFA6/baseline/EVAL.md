@@ -4,6 +4,16 @@ Tài liệu ghi **cấu hình đánh giá (eval)** của script baseline gốc v
 
 Tham số train baseline: [`README.md`](README.md).
 
+> ⚠️ **Threshold-leak đã fix (xem [README chính, mục 5](../README.md#5-đánh-giá)).**
+> Mọi số F-max/AUPR/precision/recall trong tài liệu này (mục 4, 5, 6) được đo
+> **TRƯỚC** khi fix: threshold được chọn bằng cách quét 99 mức **ngay trên chính
+> tập test/eval** rồi lấy F-max tốt nhất — một dạng leak (chọn siêu tham số bằng
+> cách nhìn thấy trước nhãn thật của tập báo cáo kết quả), khiến các số này **lạc
+> quan hơn thực tế**. `eval_Struct2GO2.py` giờ chọn threshold trên **valid** rồi
+> áp nguyên sang test (không quét lại) — số liệu sau fix **thường thấp hơn** số
+> trong bảng dưới, đó là dấu hiệu fix đúng chứ không phải model kém đi. Cần chạy
+> lại eval cho mọi checkpoint trước khi dùng số liệu cho báo cáo chính thức.
+
 ---
 
 ## 1. Tham số eval — Baseline (script gốc)
@@ -75,7 +85,8 @@ Tham số train baseline: [`README.md`](README.md).
 | | Forward | `model(..., ppi_graph, ppi_node_ids, ppi_node_emb)` | Cache PPI embedding 1 lần |
 | | Collate | Pad/truncate seq & label theo model | |
 | **Loss (log)** | | `CrossEntropyLoss` | `labels.float()` |
-| **Metric** | Quét F-max | **99** ngưỡng | Giống baseline |
+| **Metric** | Chọn threshold | Quét **99** ngưỡng trên **valid** (không phải trên split đang eval) | Đã fix leak — xem README mục 5 |
+| | Áp threshold | Threshold từ valid áp nguyên sang test, không quét lại | Nếu thiếu `{branch}_valid_dataset`: fallback quét trực tiếp trên test (in `[WARN]` leak) |
 | **Đầu ra** | Log | `{DATA_DIR}/log/test_{branch}.log` | |
 | | Kết quả | `{DATA_DIR}/test_result/` | |
 
@@ -110,8 +121,8 @@ python eval_Struct2GO2.py -branch bp -thresh 0.3 --split valid \
 | Batch loader | 4 tuple | 5 tuple + `collate_fn` |
 | `batch_size` infer | 32 | 32 |
 | Model mặc định | `bestmodel_{branch}_32_0.0001_0.2.pkl` | `bestmodel_{branch}_96_0.0001_0.2.pkl` |
-| `-thresh` JSON | CLI (vd. 0.71 mf) | CLI (theo valid của bạn) |
-| F-max trong log | Quét 99 mức | Quét 99 mức (giống) |
+| `-thresh` JSON | CLI (vd. 0.71 mf) — chỉ ảnh hưởng `*_result.json`, không ảnh hưởng F-max | Giống |
+| F-max trong log | Quét 99 mức **trên chính test** (leak) | Quét 99 mức **trên valid**, áp nguyên sang test — đã fix leak |
 | Loss test | CrossEntropyLoss | CrossEntropyLoss |
 | Log file | `log/test_{branch}.log` | `{DATA_DIR}/log/test_{branch}.log` |
 | DGL patch | Không | Có (`ensure_dgl_importable`) |
@@ -161,12 +172,15 @@ Recall ~0.331, Precision ~0.293 (cả hai run).
 
 ### 4.3 Hai loại ngưỡng (quan trọng khi đọc log)
 
-| Loại | Baseline | CAFA6 / bạn |
+| Loại | Baseline / số liệu cũ trong tài liệu này | CAFA6 hiện tại (đã fix) |
 |------|----------|-------------|
-| **`-thresh` (CLI)** | Gán nhãn trong JSON (`*_result.json`) | Giống — nên lấy từ **valid train** |
-| **F-max (log sau quét)** | Best trong 99 mức trên tập eval | Log in `thresh: 0.24` … — dùng báo cáo metric |
+| **`-thresh` (CLI)** | Gán nhãn trong JSON (`*_result.json`) | Giống — chỉ ảnh hưởng JSON, không ảnh hưởng F-max |
+| **F-max (log sau quét)** | Best trong 99 mức quét **trên chính tập test** (leak) | Threshold chọn trên **valid**, áp nguyên sang test — log vẫn in `thresh: ...` nhưng giờ là threshold từ valid, không phải best-trên-test |
 
-Ví dụ CC: ghi JSON có thể dùng `-thresh 0.3` (train), trong log test F-max đạt **0.572** tại ngưỡng quét **0.27**.
+Ví dụ CC trong bảng 4.1/4.2 (**số liệu cũ, trước fix**): ghi JSON dùng `-thresh 0.3`
+(chọn tay từ valid), còn F-max báo cáo **0.572** lại lấy từ việc quét 99 mức
+**trên chính test** và chọn mức 0.27 cho F-max cao nhất — đây chính là kiểu leak
+đã mô tả ở đầu file. Chạy lại eval theo cơ chế mới để có số liệu đáng tin cậy.
 
 ---
 
@@ -185,6 +199,6 @@ Khi viết báo cáo, nên ghi: *eval protocol CAFA6: split, model path, thresh 
 
 ## 6. Tóm tắt
 
-- **Giống baseline:** batch 32, sigmoid, quét 99 threshold, ROC/AUPR/F-max, format JSON + ROC png.  
-- **Khác baseline:** CAFA6 thêm PPI, `DATA_DIR`, fallback valid, vocab khác, model path và train config khác.  
-- **Kết quả test của bạn:** vượt paper baseline cả 3 nhánh; CC/BP cạnh tranh **with one-hot** (BP F-max ≈ 0.33).
+- **Giống baseline:** batch 32, sigmoid, ROC/AUPR/F-max, format JSON + ROC png, quét 99 mức threshold (nhưng giờ quét trên **valid**, không phải trên test — xem cảnh báo đầu file).
+- **Khác baseline:** CAFA6 thêm PPI, `DATA_DIR`, fallback valid, vocab khác (đã lọc min-count từ train — xem README mục 3, Bước 2b), model path và train config khác, và đã fix threshold-leak (script baseline gốc `eval_Struct2GO.py` KHÔNG được sửa, vẫn quét trên test).
+- **Kết quả test trong mục 4:** đo TRƯỚC khi fix threshold-leak — dùng để tham khảo xu hướng, không dùng trực tiếp cho báo cáo chính thức. Chạy lại eval để có số liệu mới.

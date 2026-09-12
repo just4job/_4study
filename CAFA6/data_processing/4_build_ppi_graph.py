@@ -11,24 +11,45 @@ Input:
 Output:
   proceed_data/ppi_graph_global             ← dgl.DGLGraph (nodes=protein, edges=PPI)
   proceed_data/ppi_protein_index            ← dict {UniProtKB_AC → node_id}
+  proceed_data/ppi_graph_train_{bp,mf,cc}   ← bản đã ẩn cạnh valid/test của từng nhánh
+                                               (chỉ tạo nếu đã chạy split_protein_ids.py
+                                               trước — xem README mục 4.5 / 3.Bước 2b)
 
 Node feature của PPI graph:
   - Mặc định: vector zero (1280-dim) — sẽ được cập nhật bởi GNN trong lúc train
-  - Nếu có dict_sequence_feature → gắn seq embedding 1280-dim (ESM-2) làm initial node feature
+  - Nếu có dict_sequence_feature → gắn seq embedding làm initial node feature.
+    Số chiều được SUY RA từ chính file đó (5_build_seq_feature.py project về
+    TARGET_DIM=1024), không hardcode — vì train_Struct2GO2.py bắt buộc
+    ppi_feat_dim == seq_dim (nó tự đọc seq_dim từ dataset).
+
+PPI leakage guard (build-time): ppi_graph_global LUÔN chứa toàn bộ protein (train+
+valid+test) — bắt buộc, vì valid/test vẫn cần có mặt trong đồ thị để model dùng PPI
+thật lúc suy luận. Cái được "chỉ tính từ train" là CẠNH nào PPIEncoder (GraphSAGE)
+được thấy lúc train: ppi_graph_train_{ns} là 1 bản sao ppi_graph_global nhưng đã cắt
+mọi cạnh chạm tới protein thuộc valid/test của nhánh đó (đọc từ split_{ns}.json, do
+split_protein_ids.py sinh ra). Nếu chưa chạy split_protein_ids.py, bước này bị bỏ qua
+(in cảnh báo) — train_Struct2GO2.py khi đó sẽ tự mask lúc runtime (chậm hơn nhưng vẫn
+đúng, xem README mục 4.5).
 """
 
 import csv
 import json
 import pickle
+import sys
 from pathlib import Path
 
 import dgl
 import numpy as np
 import torch
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from data_processing.paths import resolve_data_dir, resolve_raw_dir
+from data_processing.split_utils import build_train_only_ppi_graph, load_split
+
 # ── Cấu hình ─────────────────────────────────────────────────────────────────
-BASE_DIR   = Path("D:/CAFA6")
-RAW_DIR    = Path("D:/raw_data")
+BASE_DIR   = resolve_data_dir()
+RAW_DIR    = resolve_raw_dir()
 PROC_DIR   = BASE_DIR / "proceed_data"
 
 STRING_FILE   = RAW_DIR / "ppi.txt"
@@ -42,7 +63,11 @@ ACS_FILE = PROC_DIR / "human_BP_ACS.json"
 # 400=medium, 700=high, 900=very high
 PPI_SCORE_THRESHOLD = 700
 
-NODE_FEAT_DIM = 640    # ESM-2 esm2_t30_150M_UR50D output dim
+# Chỉ dùng khi KHÔNG có dict_sequence_feature (node feature = zero vector).
+# Khi có file đó, số chiều lấy thẳng từ vector đầu tiên trong file — xem Bước 6.
+# Mặc định 1024 = TARGET_DIM của 5_build_seq_feature.py, khớp -seq_dim của
+# train_Struct2GO2.py.
+FALLBACK_NODE_FEAT_DIM = 1024
 
 # ── Bước 1: Lấy tập protein hợp lệ từ GO annotation ─────────────────────────
 print("=" * 60)
@@ -162,20 +187,44 @@ print(f"  Nodes: {ppi_graph.num_nodes():,} | Edges: {ppi_graph.num_edges():,}")
 
 # ── Bước 6: Gắn node features ────────────────────────────────────────────────
 print("\nBước 6 — Gắn initial node features...")
-node_feat = torch.zeros(num_nodes, NODE_FEAT_DIM, dtype=torch.float32)
-
 if SEQ_FEAT_PATH.exists():
     with open(SEQ_FEAT_PATH, "rb") as f:
         dict_seq_feature: dict = pickle.load(f)
+    if not dict_seq_feature:
+        raise ValueError(f"{SEQ_FEAT_PATH} rỗng — chạy lại 5_build_seq_feature.py")
+    # Suy ra số chiều từ chính dữ liệu. Trước đây hằng số này bị hardcode 640
+    # (ESM-2 150M raw dim) trong khi 5_build_seq_feature.py project về 1024 ->
+    # gán node_feat[nid] = vector 1024 chiều làm RuntimeError ngay tại vòng lặp dưới.
+    first = next(iter(dict_seq_feature.values()))
+    node_feat_dim = len(torch.as_tensor(first, dtype=torch.float32).flatten())
+    print(f"  Số chiều seq feature đọc từ {SEQ_FEAT_PATH.name}: {node_feat_dim}")
+    node_feat = torch.zeros(num_nodes, node_feat_dim, dtype=torch.float32)
     filled = 0
+    mismatched: list[str] = []
     for ac, nid in protein_index.items():
-        if ac in dict_seq_feature:
-            feat = dict_seq_feature[ac]
-            node_feat[nid] = torch.FloatTensor(feat)
-            filled += 1
+        if ac not in dict_seq_feature:
+            continue
+        vec = torch.as_tensor(dict_seq_feature[ac], dtype=torch.float32).flatten()
+        if vec.numel() != node_feat_dim:
+            mismatched.append(ac)
+            continue
+        node_feat[nid] = vec
+        filled += 1
     print(f"  Gắn seq feature cho {filled:,} / {num_nodes:,} node")
+    if mismatched:
+        print(
+            f"  [WARN] {len(mismatched):,} protein có seq feature lệch chiều "
+            f"(bỏ qua, để zero). Ví dụ: {mismatched[:5]} — dấu hiệu "
+            "dict_sequence_feature bị trộn từ 2 lần chạy với ESM model khác nhau."
+        )
 else:
-    print("  Không tìm thấy dict_sequence_feature → dùng zero vector")
+    node_feat_dim = FALLBACK_NODE_FEAT_DIM
+    node_feat = torch.zeros(num_nodes, node_feat_dim, dtype=torch.float32)
+    print(
+        f"  [WARN] Không tìm thấy dict_sequence_feature → node feature = zero "
+        f"({node_feat_dim} chiều). PPIEncoder sẽ không có tín hiệu đầu vào nào "
+        "ngoài cấu trúc đồ thị — chạy 5_build_seq_feature.py trước để có PPI thật."
+    )
 
 ppi_graph.ndata["feat"] = node_feat
 
@@ -191,6 +240,31 @@ print(f"  Lưu PPI graph → {ppi_graph_path}")
 with open(ppi_index_path, "wb") as f:
     pickle.dump(protein_index, f)
 print(f"  Lưu protein index → {ppi_index_path}")
+
+
+# ── Bước 8 (build-time PPI leakage guard) ────────────────────────────────────
+# Với mỗi branch đã có split_{ns}.json (từ split_protein_ids.py — chạy TRƯỚC
+# bước này), sinh sẵn 1 bản ppi_graph đã ẩn cạnh valid/test — để
+# train_Struct2GO2.py không phải tự mask lúc runtime (nhanh + nhẹ RAM hơn,
+# đặc biệt trên Kaggle vì không cần load {branch}_test_dataset chỉ để lấy
+# ppi_node_id). Xem README mục 4.5.
+print("\nBước 8 — Build ppi_graph_train_{bp,mf,cc} từ split_{ns}.json (nếu có)...")
+for ns in ("bp", "mf", "cc"):
+    split = load_split(PROC_DIR, ns)
+    if split is None:
+        print(f"  [SKIP] {ns}: chưa có split_{ns}.json — chạy split_protein_ids.py trước "
+              f"(train_Struct2GO2.py sẽ tự mask lúc runtime thay thế)")
+        continue
+    hidden_acs = set(split["valid"]) | set(split["test"])
+    hidden_ids = {protein_index[ac] for ac in hidden_acs if ac in protein_index}
+    train_graph = build_train_only_ppi_graph(ppi_graph, hidden_ids)
+    out_path = PROC_DIR / f"ppi_graph_train_{ns}"
+    with open(out_path, "wb") as f:
+        pickle.dump(train_graph, f)
+    print(
+        f"  {ns}: giữ {train_graph.num_edges():,}/{ppi_graph.num_edges():,} cạnh, "
+        f"ẩn {len(hidden_ids):,} node valid/test → {out_path}"
+    )
 
 print("\n" + "=" * 60)
 print("Hoàn thành! Tiếp theo: chạy lại 3_build_graph_dataset.py để thêm ppi_node_id")

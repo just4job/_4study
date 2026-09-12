@@ -17,12 +17,15 @@ Output: kaggle_data.zip với cấu trúc:
       label_cc_network (nếu có)
       ppi_graph_global
       ppi_protein_index
+      split_mf.json / split_bp.json / split_cc.json     (nếu đã chạy split_protein_ids.py)
+      ppi_graph_train_mf / _bp / _cc                    (nếu đã chạy 4_build_ppi_graph.py sau đó)
 
 Sau khi tạo xong:
   1. Vào https://www.kaggle.com/datasets → New Dataset
   2. Upload kaggle_data.zip
   3. Đặt tên dataset, ví dụ "cafa6-data"
 """
+import json
 import os
 import sys
 import zipfile
@@ -51,6 +54,21 @@ def collect_files(branches: tuple[str, ...], splits: tuple[str, ...]) -> list[Pa
         acs_path = PROC_DIR / f"human_{branch.upper()}_ACS.json"
         if acs_path.exists():
             files.append(acs_path)
+        # PPI leakage guard build-time (xem README mục 4.5): nếu đã chạy
+        # split_protein_ids.py + 4_build_ppi_graph.py, pack luôn split_{ns}.json +
+        # ppi_graph_train_{ns} — train_Struct2GO2.py trên Kaggle sẽ dùng thẳng, không
+        # cần tự mask lúc runtime (đỡ phải load {branch}_test_dataset chỉ để mask).
+        split_path = PROC_DIR / f"split_{branch}.json"
+        ppi_train_path = PROC_DIR / f"ppi_graph_train_{branch}"
+        if split_path.exists():
+            files.append(split_path)
+        if ppi_train_path.exists():
+            files.append(ppi_train_path)
+        elif split_path.exists():
+            print(
+                f"[WARN] Có split_{branch}.json nhưng thiếu ppi_graph_train_{branch} — "
+                "chạy lại data_processing/4_build_ppi_graph.py để build."
+            )
 
     if branches == ("mf", "cc", "bp"):
         for f in (PROC_DIR / "ppi_graph_global", PROC_DIR / "ppi_protein_index"):
@@ -98,7 +116,9 @@ def main():
         print("ERROR: Không tìm thấy file dataset nào. Đã chạy data_processing/divide_data.py chưa?")
         sys.exit(1)
 
-    # Verify MF label count before upload
+    # Verify MF label count before upload — so với label_vocab_mf.json (Bước 2b,
+    # đã lọc min-count đúng) thay vì hardcode 422 (số cũ từ 1 lần build thủ công
+    # trước khi có bộ lọc đúng trong pipeline, xem README mục 3 — Bước 2b).
     if "mf" in branches and (DIVIDED_DIR / "mf_train_dataset").exists():
         try:
             import pickle
@@ -110,8 +130,23 @@ def main():
                 ds = pickle.load(f)
             dim = int(np.asarray(ds[0][2]).reshape(-1).shape[0])
             print(f"mf_train: n={len(ds)} labels={dim}")
-            if dim != 422:
-                print(f"[WARN] MF ablation CAFA6 cần labels=422 (valid final-data). Hiện tại: {dim}")
+
+            vocab_path = PROC_DIR / "label_vocab_mf.json"
+            expected_dim = None
+            expected_source = None
+            if vocab_path.exists():
+                with open(vocab_path, "r", encoding="utf-8") as f:
+                    expected_dim = len(json.load(f))
+                expected_source = "label_vocab_mf.json"
+            else:
+                expected_dim = 422
+                expected_source = "số cũ 'final-data' (fallback — chưa chạy split_protein_ids.py)"
+
+            if dim != expected_dim:
+                print(
+                    f"[WARN] mf_train labels={dim} khác {expected_source} "
+                    f"(labels={expected_dim}). Kiểm tra lại trước khi upload."
+                )
         except Exception as exc:
             print(f"[WARN] Không verify mf_train: {exc}")
 

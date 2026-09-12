@@ -10,6 +10,7 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from data_processing.dataset import MyDataSet
+from data_processing.split_utils import load_split
 
 
 def _build_subset_dict(source_dict, keys):
@@ -116,7 +117,32 @@ if __name__ == "__main__":
             with open(ppi_id_path, 'rb') as f:
                 emb_ppi_node_id = pickle.load(f)
 
-        train_keys, valid_keys, test_keys = _split_keys(emb_graph.keys(), seed=args.seed)
+        available = set(emb_graph.keys())
+        split = load_split(PROC_DIR, ns_type)
+        if split is not None:
+            train_keys = [k for k in split["train"] if k in available]
+            valid_keys = [k for k in split["valid"] if k in available]
+            test_keys = [k for k in split["test"] if k in available]
+            covered = set(split["train"]) | set(split["valid"]) | set(split["test"])
+            missing = available - covered
+            if missing:
+                print(
+                    f"  [WARN] {len(missing)} protein trong emb_graph_{ns_type} không có trong "
+                    f"split_{ns_type}.json (dữ liệu mới hơn split?) — bị bỏ qua, không rơi vào "
+                    "train/valid/test nào. Chạy split_protein_ids.py --force để cập nhật."
+                )
+            print(
+                f"  Dùng split_{ns_type}.json (seed={split.get('seed')}) — sau khi giao với "
+                f"{len(available):,} protein có đủ dữ liệu: {len(train_keys):,} train / "
+                f"{len(valid_keys):,} valid / {len(test_keys):,} test"
+            )
+        else:
+            train_keys, valid_keys, test_keys = _split_keys(emb_graph.keys(), seed=args.seed)
+            print(
+                f"  [WARN] Chưa có split_{ns_type}.json — random split tại chỗ (seed={args.seed}). "
+                "Chạy data_processing/split_protein_ids.py TRƯỚC 4_build_ppi_graph.py / "
+                "3_build_graph_dataset.py ở lần build tiếp theo để tránh leak (README mục 4.5)."
+            )
 
         train_dataset = _build_dataset(emb_graph, emb_seq_feature, emb_label, emb_ppi_node_id, train_keys)
         valid_dataset = _build_dataset(emb_graph, emb_seq_feature, emb_label, emb_ppi_node_id, valid_keys)

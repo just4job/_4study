@@ -1,11 +1,28 @@
 #!/usr/bin/env python3
-"""Patch DGL on Windows/local when graphbolt DLL missing (final_pro env).
+"""Vá DGL ở máy LOCAL khi thiếu thư viện C++ graphbolt (.dll/.so).
 
-Run:
+Tên file nói "windows" vì lần đầu gặp trên Windows, nhưng apply_patches_only()
+không phụ thuộc hệ điều hành — Linux/macOS dùng y hệt.
+
+Triệu chứng nó sửa:
+    FileNotFoundError: Cannot find DGL C++ graphbolt library at
+        .../dgl/graphbolt/libgraphbolt_pytorch_<torch version>.so
+
+DGL ship sẵn 1 file .so BUILD RIÊNG CHO TỪNG BẢN TORCH. Dùng torch mới hơn
+mọi bản dgl đang có (vd. torch 2.14 với dgl 2.1.0) thì file đó không tồn tại
+và sẽ không bao giờ có. Script bọc load_graphbolt() trong try/except và biến
+`from . import distributed` thành tuỳ chọn, nên `import dgl` chạy tiếp.
+
+An toàn với repo này: pipeline chỉ dùng core graph API (dgl.graph, to_simple,
+remove_self_loop, edge_subgraph, add_self_loop), không đụng graphbolt hay
+dgl.distributed. Chỉ train_Struct2GO.py (trainer CŨ) cần dgl.dataloading;
+train_Struct2GO2.py dùng torch.utils.data.DataLoader.
+
+Chạy:
   python scripts/fix_dgl_windows.py
   python -c "import dgl; print(dgl.__version__)"
 
-Optional reinstall CPU wheel matching torch:
+Cài lại wheel CPU khớp torch trước khi vá:
   python scripts/fix_dgl_windows.py --reinstall-cpu
 """
 from __future__ import annotations

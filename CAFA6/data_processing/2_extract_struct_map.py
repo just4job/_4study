@@ -1,6 +1,11 @@
 import gzip
+import sys
 import numpy as np
 from pathlib import Path
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from data_processing.paths import resolve_data_dir, resolve_raw_dir
 from Bio.PDB.PDBParser import PDBParser
 from scipy.spatial import distance_matrix
 
@@ -45,8 +50,8 @@ if __name__ == "__main__":
     from tqdm import tqdm
 
     # ── Cấu hình đường dẫn ──────────────────────────────────────────────────
-    STRUCT_DIR = Path("D:/raw_data/struct_feature")
-    OUTPUT_DIR = Path("D:/CAFA6/proceed_data/proteins_edges")
+    STRUCT_DIR = resolve_raw_dir() / "struct_feature"
+    OUTPUT_DIR = resolve_data_dir() / "proceed_data" / "proteins_edges"
     THRESHOLD  = 8.0  # Angstrom
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

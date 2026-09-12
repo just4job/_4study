@@ -110,7 +110,7 @@ def main() -> None:
     args = parser.parse_args()
 
     _ensure_repo_on_path()
-    work = Path(os.environ.get("DATA_DIR", "/kaggle/working/CAFA6"))
+    work = Path(os.environ.get("DATA_DIR", str(REPO)))
     data_root = find_cafa6_data_root(Path("/kaggle/input"))
     print("Data root:", data_root)
 
@@ -172,7 +172,8 @@ def main() -> None:
             except Exception as exc:
                 print(
                     f"  [WARN] repair_mf_train: {exc} — "
-                    "Upload kaggle_mf.zip (422 labels) từ pack_for_kaggle.py"
+                    "Upload kaggle_mf.zip từ pack_for_kaggle.py (label_dim đúng theo "
+                    "label_vocab_mf.json hiện tại, xem repair_mf_train.py)"
                 )
 
     assert (work / "proceed_data/ppi_graph_global").exists()
@@ -194,14 +195,15 @@ def main() -> None:
             except ModuleNotFoundError as exc:
                 raise RuntimeError(
                     f"Cannot import CAFA6 modules while validating {p}. "
-                    "Run: cd /kaggle/working/CAFA6 && python scripts/kaggle_link_data.py"
+                    "Run: cd /kaggle/working/_4study/CAFA6 && python scripts/kaggle_link_data.py"
                 ) from exc
             except Exception as exc:
                 msg = f"{p.name}: {type(exc).__name__}: {exc}"
                 if branch == "mf" and split == "train":
                     print(
-                        f"  [WARN] {msg} — upload kaggle_mf.zip (422 labels), "
-                        "KHÔNG dùng mf-train1 (5136)"
+                        f"  [WARN] {msg} — upload kaggle_mf.zip có label_dim khớp "
+                        "proceed_data/label_vocab_mf.json hiện tại (đừng dùng bản "
+                        "mf-train cũ không lọc tần suất — số label sẽ lệch hẳn)"
                     )
                 else:
                     errors.append(msg)

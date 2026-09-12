@@ -17,6 +17,7 @@ import dgl
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from sklearn.metrics import auc, roc_curve
@@ -24,8 +25,9 @@ from tqdm import tqdm
 from transformers import get_cosine_schedule_with_warmup
 
 from data_processing.divide_data import MyDataSet
-from model.evaluation import cacul_aupr, calculate_performance, roc_auc_flat
-from model.network import SAGNetworkHierarchical
+from data_processing.split_utils import build_train_only_ppi_graph
+from model.evaluation import cacul_aupr, calculate_performance, macro_and_bucket_report, roc_auc_flat
+from model.network import PPIEncoder, SAGNetworkHierarchical
 
 warnings.filterwarnings("ignore")
 
@@ -90,6 +92,11 @@ def _load_pickle(path: str):
             f"Dataset pickle is truncated or corrupted: {file_path}. Rebuild divided_data or re-run kaggle_link_data.py."
         ) from exc
 Thresholds = [x / 100 for x in range(1, 100)]
+
+
+def _collect_ppi_node_ids(dataset: MyDataSet) -> set[int]:
+    """Tập ppi_node_id (>=0) của các protein trong 1 dataset split."""
+    return {nid for nid in dataset.ppi_node_id.values() if nid is not None and nid >= 0}
 
 
 def _resolve_data_dir() -> str:
@@ -176,6 +183,10 @@ def apply_kaggle_preset(args: argparse.Namespace) -> None:
     # Kaggle preset validates only at the end; keep user overrides for other knobs
     # but do not let validate_every reintroduce long pauses every few epochs.
     args.validate_every = args.epochs
+    # pos_weight cải thiện AUPR/recall trên label hiếm (long-tail GO term) — bật
+    # mặc định trừ khi user tự truyền --pos-weight/--no-pos-weight.
+    if not _argv_has("--pos-weight", "--no-pos-weight"):
+        args.pos_weight = True
 
 
 def apply_baseline_parity_preset(args: argparse.Namespace) -> None:
@@ -199,6 +210,10 @@ def apply_baseline_parity_preset(args: argparse.Namespace) -> None:
     args.amp = False
     global Thresholds
     Thresholds = [x / 100 for x in range(1, 100)]
+    # pos_weight cải thiện AUPR/recall trên label hiếm (long-tail GO term) — bật
+    # mặc định trừ khi user tự truyền --pos-weight/--no-pos-weight.
+    if not _argv_has("--pos-weight", "--no-pos-weight"):
+        args.pos_weight = True
 
 
 def _restore_cli_overrides(
@@ -229,20 +244,73 @@ def labels_to_device(labels: torch.Tensor, device: torch.device) -> torch.Tensor
     return labels.to(device).float()
 
 
-def _estimate_pos_weight(train_dataset, label_dim: int, max_samples: int = 3000, cap: float = 50.0) -> float:
-    """Tỷ lệ neg/pos trên train — giúp AUPR (term hiếm) cho concat / no-ppi."""
-    pos = 0.0
-    total = 0.0
-    n = min(len(train_dataset), max_samples)
+def _estimate_pos_weight_vector(train_dataset, label_dim: int, cap: float = 100.0) -> torch.Tensor:
+    """pos_weight RIÊNG CHO TỪNG LABEL (không phải 1 số dùng chung cho mọi label
+    như bản cũ) — label hiếm được weight cao hơn nhiều so với label phổ biến,
+    đúng bản chất BCEWithLogitsLoss hỗ trợ pos_weight per-class sẵn có.
+
+    weight_i = (n - pos_i) / max(pos_i, 1), cap ở `cap` để tránh loss nổ khi
+    1 label gần như không có positive nào (hiếm khi xảy ra vì label_vocab_{ns}
+    đã lọc min-count trên train — xem split_protein_ids.py — nhưng vẫn có thể
+    lệch nhẹ vì train_dataset ở đây là sau khi lọc bỏ protein thiếu contact map).
+
+    Quét TOÀN BỘ train_dataset (đã nằm sẵn trong RAM, không tốn I/O) — không
+    sample 3000 như bản cũ, vì sample nhỏ dễ bỏ sót hẳn 1 label hiếm, dẫn tới
+    ước lượng sai ngay từ đầu.
+    """
+    n = len(train_dataset)
+    pos_counts = np.zeros(label_dim, dtype=np.float64)
     for i in range(n):
         sample = train_dataset[i]
         lbl = sample[2] if len(sample) > 2 else sample[1]
         arr = np.asarray(lbl, dtype=np.float64).reshape(-1)[:label_dim]
-        pos += float(arr.sum())
-        total += float(arr.size)
-    if pos <= 0:
-        return 1.0
-    return min((total - pos) / pos, cap)
+        pos_counts[: arr.shape[0]] += arr
+    neg_counts = n - pos_counts
+    with np.errstate(divide="ignore", invalid="ignore"):
+        weights = np.where(pos_counts > 0, neg_counts / np.maximum(pos_counts, 1), cap)
+    weights = np.clip(weights, 1.0, cap)
+    return torch.tensor(weights, dtype=torch.float32)
+
+
+class _MultiLabelFocalLoss(nn.Module):
+    """Focal loss (Lin et al., 2017) cho multi-label sigmoid — hạ trọng số các
+    mẫu/label model đã dự đoán tự tin đúng, dồn gradient vào mẫu/label khó
+    (thường là label hiếm) thay vì cần tự ước lượng pos_weight như BCE."""
+
+    def __init__(self, gamma: float = 2.0, alpha: float = 0.25):
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        targets = targets.float()
+        bce = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+        prob = torch.sigmoid(logits)
+        p_t = prob * targets + (1 - prob) * (1 - targets)
+        loss = bce * (1 - p_t).clamp(min=0).pow(self.gamma)
+        if self.alpha >= 0:
+            alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+            loss = alpha_t * loss
+        return loss.mean()
+
+
+def _build_criterion(args: argparse.Namespace, train_dataset, labels_num: int, device, logger) -> nn.Module:
+    """Chọn hàm loss theo --loss (bce | bce_pos_weight | focal). Nếu --loss không
+    truyền, suy ra từ --pos-weight/--no-pos-weight (tương thích ngược với script/
+    lệnh cũ chỉ biết --pos-weight, vd. scripts/run_fusion_ablation.py)."""
+    loss_name = args.loss or ("bce_pos_weight" if args.pos_weight else "bce")
+    if loss_name == "focal":
+        logger.info(f"loss=focal (gamma={args.focal_gamma}, alpha={args.focal_alpha})")
+        return _MultiLabelFocalLoss(gamma=args.focal_gamma, alpha=args.focal_alpha)
+    if loss_name == "bce_pos_weight":
+        weights = _estimate_pos_weight_vector(train_dataset, labels_num, cap=args.pos_weight_cap)
+        logger.info(
+            f"loss=bce_pos_weight (per-label, cap={args.pos_weight_cap}, "
+            f"min={weights.min():.2f}, max={weights.max():.2f}, mean={weights.mean():.2f})"
+        )
+        return nn.BCEWithLogitsLoss(pos_weight=weights.to(device))
+    logger.info("loss=bce (không weight)")
+    return nn.BCEWithLogitsLoss()
 
 
 def _ckpt_selection_score(fmax: float, aupr: float, metric: str) -> float:
@@ -284,9 +352,13 @@ def main():
     parser.add_argument(
         "--fusion",
         dest="fusion_mode",
-        choices=["attention", "concat"],
+        choices=["attention", "bi_attention", "concat"],
         default="attention",
-        help="Cách gộp struct/seq/ppi: attention (cross-attn) hoặc concat",
+        help=(
+            "Cách gộp struct/seq/ppi: attention (cross-attn 1 chiều: struct+seq "
+            "làm Query, PPI chỉ là Key/Value tĩnh) | bi_attention (cross-attn 2 "
+            "chiều: struct/seq/PPI cùng self-attend, PPI cũng được cập nhật) | concat"
+        ),
     )
     parser.add_argument(
         "--no-baseline-parity",
@@ -301,12 +373,51 @@ def main():
     parser.add_argument("--no_cache_ppi", dest="cache_ppi", action="store_false",
                         help="Tắt cache PPI embedding mỗi epoch")
     parser.set_defaults(cache_ppi=True)
+    parser.add_argument(
+        "--no_ppi_leakage_guard",
+        dest="ppi_leakage_guard",
+        action="store_false",
+        help=(
+            "Tắt cơ chế ẩn cạnh PPI nối tới valid/test khi train (bán-inductive hoá PPI). "
+            "Mặc định BẬT để chống leak; chỉ tắt khi cố tình muốn tái tạo hành vi "
+            "transductive cũ (vd. để so sánh/ablation)."
+        ),
+    )
+    parser.set_defaults(ppi_leakage_guard=True)
     parser.add_argument("--cpu", action="store_true", help="Bắt buộc train trên CPU")
     parser.add_argument(
         "--pos-weight",
         action="store_true",
-        help="BCE pos_weight từ train set (cải thiện AUPR — khuyến nghị cho concat / no-ppi)",
+        help=(
+            "BCE pos_weight từ train set (cải thiện AUPR/recall trên label hiếm). "
+            "Preset --kaggle / baseline-parity (mặc định) tự bật; dùng --no-pos-weight để tắt."
+        ),
     )
+    parser.add_argument(
+        "--no-pos-weight",
+        dest="pos_weight",
+        action="store_false",
+        help="Tắt pos_weight kể cả khi preset --kaggle/baseline-parity tự bật.",
+    )
+    parser.add_argument(
+        "-pos_weight_cap", "--pos_weight_cap", type=float, default=100.0,
+        help="Trần weight cho 1 label khi --loss=bce_pos_weight (label càng hiếm weight càng cao, cap để tránh loss nổ)",
+    )
+    parser.add_argument(
+        "--loss",
+        choices=["bce", "bce_pos_weight", "focal"],
+        default=None,
+        help=(
+            "Hàm loss: bce (không weight) | bce_pos_weight (per-label, xem "
+            "--pos-weight/--pos_weight_cap) | focal (Lin et al. 2017, xem "
+            "-focal_gamma/-focal_alpha). Không truyền thì suy ra từ --pos-weight "
+            "(tương thích ngược): bật -> bce_pos_weight, tắt -> bce."
+        ),
+    )
+    parser.add_argument("-focal_gamma", "--focal_gamma", type=float, default=2.0,
+                        help="Focal loss gamma (mũ hạ trọng số mẫu dễ) — chỉ dùng khi --loss=focal")
+    parser.add_argument("-focal_alpha", "--focal_alpha", type=float, default=0.25,
+                        help="Focal loss alpha (trọng số lớp positive) — chỉ dùng khi --loss=focal")
     parser.add_argument(
         "--ckpt-metric",
         choices=["auto", "fmax", "aupr", "combo"],
@@ -374,8 +485,10 @@ def main():
     data_dir = _resolve_data_dir()
     train_data_path = f"{data_dir}/divided_data/{args.branch}_train_dataset"
     valid_data_path = f"{data_dir}/divided_data/{args.branch}_valid_dataset"
+    test_data_path = f"{data_dir}/divided_data/{args.branch}_test_dataset"
     label_network_path = f"{data_dir}/proceed_data/label_{args.branch}_network"
     ppi_graph_path = f"{data_dir}/proceed_data/ppi_graph_global"
+    ppi_graph_train_path = f"{data_dir}/proceed_data/ppi_graph_train_{args.branch}"
 
     logger = create_logger(args.branch, data_dir)
     ckpt_metric = _resolve_ckpt_metric(args)
@@ -383,7 +496,9 @@ def main():
         f"device={device}, amp={args.amp}, cache_ppi={args.cache_ppi}, "
         f"kaggle={args.kaggle}, baseline_parity={args.baseline_parity}, "
         f"use_ppi={args.use_ppi}, fusion_mode={args.fusion_mode}, "
-        f"ckpt_metric={ckpt_metric}, pos_weight={args.pos_weight}"
+        f"ppi_leakage_guard={args.ppi_leakage_guard}, "
+        f"ckpt_metric={ckpt_metric}, pos_weight={args.pos_weight}, "
+        f"loss={args.loss or ('bce_pos_weight' if args.pos_weight else 'bce')}"
     )
     logger.info(
         f"epochs={args.epochs}, batch_size={args.batch_size}, dropout={args.dropout}, "
@@ -403,6 +518,7 @@ def main():
     label_network = label_network.to(device)
 
     ppi_graph = None
+    train_ppi_graph = None
     ppi_feat_dim = args.seq_dim
     if args.use_ppi:
         print(f"Loading PPI graph: {ppi_graph_path} ...", flush=True)
@@ -410,6 +526,49 @@ def main():
         ppi_graph = ppi_graph.to(device)
         print("  PPI graph OK", flush=True)
         ppi_feat_dim = int(ppi_graph.ndata["feat"].shape[1])
+
+        train_ppi_graph = ppi_graph
+        if args.ppi_leakage_guard:
+            if Path(ppi_graph_train_path).is_file():
+                # Build-time guard: ppi_graph_train_{branch} đã được sinh sẵn bởi
+                # data_processing/4_build_ppi_graph.py (sau split_protein_ids.py) —
+                # nhẹ + nhanh hơn nhiều so với mask lúc runtime, đặc biệt trên Kaggle
+                # vì KHÔNG cần load {branch}_test_dataset (pickle nặng) chỉ để lấy
+                # ppi_node_id. Xem README mục 4.5.
+                print(f"Loading pre-built train-only PPI graph: {ppi_graph_train_path} ...", flush=True)
+                train_ppi_graph = _load_pickle(ppi_graph_train_path).to(device)
+                logger.info(
+                    f"[ppi-leak-guard] dùng ppi_graph_train_{args.branch} đã build sẵn: "
+                    f"giữ {train_ppi_graph.num_edges():,}/{ppi_graph.num_edges():,} cạnh "
+                    "(build-time; dùng --no_ppi_leakage_guard để tắt)"
+                )
+            else:
+                # Fallback runtime: chưa chạy split_protein_ids.py + 4_build_ppi_graph.py
+                # theo pipeline mới → tự mask trong RAM như cũ (cần load test_dataset).
+                hidden_ids = _collect_ppi_node_ids(valid_dataset)
+                if Path(test_data_path).is_file():
+                    test_dataset_for_mask = _load_pickle(test_data_path)
+                    hidden_ids |= _collect_ppi_node_ids(test_dataset_for_mask)
+                    del test_dataset_for_mask
+                else:
+                    logger.warning(
+                        f"[ppi-leak-guard] Không tìm thấy {test_data_path} — chỉ ẩn được node "
+                        "valid, chưa chắc chắn ẩn hết node test. Chạy divide_data.py để có "
+                        "test_dataset đầy đủ."
+                    )
+                train_ppi_graph = build_train_only_ppi_graph(ppi_graph, hidden_ids)
+                logger.info(
+                    f"[ppi-leak-guard] không thấy ppi_graph_train_{args.branch} đã build sẵn — "
+                    f"mask lúc runtime (fallback, chậm/tốn RAM hơn — khuyến nghị chạy "
+                    "data_processing/split_protein_ids.py rồi 4_build_ppi_graph.py để build "
+                    f"sẵn trên máy local): giữ {train_ppi_graph.num_edges():,}/"
+                    f"{ppi_graph.num_edges():,} cạnh, ẩn {len(hidden_ids):,} node valid/test"
+                )
+        else:
+            logger.warning(
+                "[ppi-leak-guard] TẮT (--no_ppi_leakage_guard) — PPIEncoder sẽ thấy toàn bộ "
+                "PPI graph (kể cả cạnh tới valid/test) trong lúc train. Chỉ dùng để so sánh/ablation."
+            )
 
     sample_label = train_dataset[0][2]
     detected_labels = int(np.asarray(sample_label).reshape(-1).shape[0])
@@ -463,6 +622,24 @@ def main():
         fusion_mode=args.fusion_mode,
     ).to(device)
 
+    # Neighbor index cho cross-attention (fusion_mode="attention" HOẶC "bi_attention"
+    # — cả 2 đều dùng PPIEncoder.gather_neighbor_batch) phải khớp với đồ thị đang
+    # dùng ở từng thời điểm — model chỉ cache 1 index nội bộ (theo lệnh gọi đầu
+    # tiên), nên khi train dùng train_ppi_graph còn valid/test dùng ppi_graph gốc, ta
+    # tự dựng & truyền tay 2 bảng riêng để tránh dùng nhầm index của đồ thị kia.
+    train_ppi_neighbor_index = None
+    full_ppi_neighbor_index = None
+    if args.use_ppi and args.fusion_mode in ("attention", "bi_attention"):
+        train_ppi_neighbor_index = PPIEncoder.build_neighbor_index(
+            train_ppi_graph, model.ppi_max_neighbors
+        )
+        if train_ppi_graph is ppi_graph:
+            full_ppi_neighbor_index = train_ppi_neighbor_index
+        else:
+            full_ppi_neighbor_index = PPIEncoder.build_neighbor_index(
+                ppi_graph, model.ppi_max_neighbors
+            )
+
     total_steps = args.epochs * max(len(train_dataloader), 1)
     if args.baseline_parity:
         optimizer = optim.Adam(model.parameters(), lr=args.learningrate)
@@ -473,13 +650,7 @@ def main():
     lr_scheduler = get_cosine_schedule_with_warmup(
         optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps
     )
-    if args.pos_weight:
-        pw = _estimate_pos_weight(train_dataset, labels_num)
-        pos_weight = torch.full((labels_num,), pw, device=device, dtype=torch.float32)
-        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-        logger.info(f"pos_weight={pw:.2f} (neg/pos trên train, cap=50)")
-    else:
-        criterion = nn.BCEWithLogitsLoss()
+    criterion = _build_criterion(args, train_dataset, labels_num, device, logger)
     scaler = torch.cuda.amp.GradScaler(enabled=use_cuda and args.amp)
 
     best_fscore = 0.0
@@ -498,8 +669,9 @@ def main():
 
         ppi_node_emb = None
         if args.use_ppi and args.cache_ppi:
+            # train_ppi_graph = full graph khi guard tắt hoặc use_ppi=False không tới đây.
             with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_cuda and args.amp):
-                ppi_node_emb = model.encode_ppi_nodes(ppi_graph).detach()
+                ppi_node_emb = model.encode_ppi_nodes(train_ppi_graph).detach()
 
         train_loss = 0.0
         for i, (_, graphs, labels, seq_feats, ppi_node_ids) in enumerate(
@@ -516,9 +688,10 @@ def main():
                     graphs,
                     seq_feats,
                     label_network,
-                    ppi_graph=ppi_graph if args.use_ppi else None,
+                    ppi_graph=train_ppi_graph if args.use_ppi else None,
                     ppi_node_ids=ppi_node_ids if args.use_ppi else None,
                     ppi_node_emb=ppi_node_emb,
+                    ppi_neighbor_index=train_ppi_neighbor_index if args.use_ppi else None,
                 )
                 loss = criterion(logits, labels)
 
@@ -546,6 +719,7 @@ def main():
         pred, actual = [], []
 
         if args.use_ppi and args.cache_ppi:
+            # Validate LUÔN dùng ppi_graph gốc (đầy đủ cạnh) — khác train_ppi_graph ở trên.
             with torch.no_grad(), torch.cuda.amp.autocast(enabled=use_cuda and args.amp):
                 ppi_node_emb = model.encode_ppi_nodes(ppi_graph).detach()
 
@@ -566,6 +740,7 @@ def main():
                         ppi_graph=ppi_graph if args.use_ppi else None,
                         ppi_node_ids=ppi_node_ids if args.use_ppi else None,
                         ppi_node_emb=ppi_node_emb,
+                        ppi_neighbor_index=full_ppi_neighbor_index if args.use_ppi else None,
                     )
                     loss = criterion(logits, labels)
                 probs = torch.sigmoid(logits)
@@ -617,6 +792,16 @@ def main():
             logger.info(
                 f"threshold={thresh}, f_score={f_score}, auc={auc_score}, "
                 f"recall={recall}, precision={precision}, aupr={aupr}"
+            )
+            # Chẩn đoán mất cân bằng — không ảnh hưởng chọn checkpoint (vẫn theo
+            # ckpt_metric ở trên): micro-F1 phía trên có thể "đẹp" trong khi model
+            # gần như bỏ rơi label hiếm. Xem README mục đề xuất cải tiến (Tier B2).
+            bucket_report = macro_and_bucket_report(actual, pred, threshold=thresh)
+            logger.info(
+                f"macro_f1={bucket_report['macro_f1']:.4f} | "
+                f"rare(n={bucket_report['rare_n_labels']})_f1={bucket_report['rare_f1']} | "
+                f"medium(n={bucket_report['medium_n_labels']})_f1={bucket_report['medium_f1']} | "
+                f"common(n={bucket_report['common_n_labels']})_f1={bucket_report['common_f1']}"
             )
         else:
             logger.warning(f"epoch={epoch}: no valid F-score (empty pred/actual?)")
