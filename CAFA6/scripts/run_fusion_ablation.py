@@ -346,6 +346,8 @@ def main() -> int:
     env = _env(data_dir)
     os.environ.update(env)
 
+    # Hậu tố dùng chung cho summary + log test, giống quy ước của checkpoint.
+    loss_suffix = f"_{args.loss}" if args.loss else ""
     selected = [c for c in FUSION_CONFIGS if c.name in args.configs]
     results: list[dict] = []
     failed: list[str] = []
@@ -386,13 +388,16 @@ def main() -> int:
                     if rc != 0:
                         raise RuntimeError(f"Eval exit {rc}")
 
-                    # Lưu log test riêng từng config
+                    # Lưu log test riêng từng config (kèm hậu tố loss như checkpoint,
+                    # để lần chạy loss sau không ghi đè log của lần trước)
                     src_log = data_dir / "log" / f"test_{branch}.log"
-                    dst_log = data_dir / "log" / f"test_{branch}_{cfg.name}.log"
+                    dst_log = data_dir / "log" / f"test_{branch}_{cfg.name}{loss_suffix}.log"
                     if src_log.is_file():
                         shutil.copy2(src_log, dst_log)
 
-                metrics = _parse_test_log(data_dir / "log" / f"test_{branch}_{cfg.name}.log")
+                metrics = _parse_test_log(
+                    data_dir / "log" / f"test_{branch}_{cfg.name}{loss_suffix}.log"
+                )
                 if not metrics:
                     metrics = _parse_test_log(data_dir / "log" / f"test_{branch}.log")
                 row = {
@@ -444,10 +449,11 @@ def main() -> int:
     for branch in args.branches:
         _compare_branch(results, branch)
 
-    summary_path = data_dir / "log" / "fusion_ablation_summary.json"
+    summary_path = data_dir / "log" / f"fusion_ablation_summary{loss_suffix}.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "profile": args.profile,
+        "loss": args.loss or "bce_pos_weight (mặc định mỗi config)",
         "elapsed_minutes": round(elapsed, 1),
         "results": results,
         "baseline_repro": BASELINE_REPRO,
