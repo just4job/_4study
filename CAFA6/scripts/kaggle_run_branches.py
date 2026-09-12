@@ -74,14 +74,44 @@ def train_branch(
     return _run(cmd, cwd, env)
 
 
+# Cờ đổi KIẾN TRÚC model, nên eval bắt buộc phải nhận đúng như lúc train —
+# nạp checkpoint concat bằng model attention thì state_dict không khớp.
+_ARCH_FLAGS_WITH_VALUE = ("--fusion",)
+_ARCH_FLAGS_BOOL = ("--no-ppi",)
+
+
+def _arch_flags(extra: list[str]) -> list[str]:
+    """Lọc ra từ train_extra những cờ quyết định kiến trúc, để truyền sang eval."""
+    out: list[str] = []
+    i = 0
+    while i < len(extra):
+        tok = extra[i]
+        if tok in _ARCH_FLAGS_WITH_VALUE and i + 1 < len(extra):
+            out.extend([tok, extra[i + 1]])
+            i += 2
+            continue
+        if tok in _ARCH_FLAGS_BOOL:
+            out.append(tok)
+        i += 1
+    return out
+
+
 def eval_branch(
-    branch: str, cwd: Path, env: dict[str, str], baseline_parity: bool
+    branch: str,
+    cwd: Path,
+    env: dict[str, str],
+    baseline_parity: bool,
+    extra: list[str] | None = None,
 ) -> int:
     cmd = [sys.executable, "eval_Struct2GO2.py", "-branch", branch]
     if baseline_parity:
         cmd.extend(["--baseline-parity", "--split", "test"])
     else:
         cmd.extend(["--no-baseline-parity", "--split", "auto"])
+    arch = _arch_flags(extra or [])
+    if arch:
+        print(f"[eval] truyền cờ kiến trúc từ train: {' '.join(arch)}")
+        cmd.extend(arch)
     return _run(cmd, cwd, env)
 
 
@@ -169,7 +199,13 @@ def main() -> int:
                 continue
 
             if not args.no_eval:
-                rc = eval_branch(branch, cwd, env, baseline_parity=args.baseline_parity)
+                rc = eval_branch(
+                    branch,
+                    cwd,
+                    env,
+                    baseline_parity=args.baseline_parity,
+                    extra=args.train_extra,
+                )
                 if rc != 0:
                     print(f"[{branch}] EVAL FAILED (exit {rc}) — vẫn lưu log/model", file=sys.stderr)
         else:
